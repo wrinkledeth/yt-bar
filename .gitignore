@@ -17,6 +17,8 @@ htmlcov/
 # macOS / local tooling
 .DS_Store
 .claude/
+.codex/
+codex-skills/
 
 # Local media / scratch files
 songs/

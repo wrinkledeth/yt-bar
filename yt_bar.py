@@ -37,7 +37,6 @@ VISUALIZER_TAP_BUFFER_FRAMES = 1024
 DECODER_QUEUE_BUFFERS = 24
 CACHE_DELAY_SECONDS = 10.0
 CACHE_WORKER_COUNT = 2
-RECENT_MENU_LIMIT = 10
 RECENT_TITLE_LIMIT = 55
 SEEK_TRACE_LOGGING = True
 PARTIAL_CACHE_SUFFIX = ".partial.opus"
@@ -45,8 +44,12 @@ APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 SONGS_DIR_NAME = "songs"
 SONGS_DIR = os.path.join(APP_ROOT, SONGS_DIR_NAME)
 RECENT_INDEX_PATH = os.path.join(SONGS_DIR, "recent.json")
+SETTINGS_PATH = os.path.join(SONGS_DIR, "settings.json")
 MEDIA_PLAYER_FRAMEWORK_PATH = "/System/Library/Frameworks/MediaPlayer.framework"
-REMOTE_SKIP_INTERVAL_SECONDS = 30.0
+SKIP_INTERVAL_PRESETS = (10.0, 15.0, 30.0, 60.0, 90.0)
+RECENT_SIZE_PRESETS = (5, 10, 20, 30)
+DEFAULT_SKIP_INTERVAL_SECONDS = 30.0
+DEFAULT_RECENT_MENU_LIMIT = 10
 MP_REMOTE_COMMAND_STATUS_SUCCESS = 0
 MP_REMOTE_COMMAND_STATUS_NO_SUCH_CONTENT = 100
 MP_REMOTE_COMMAND_STATUS_COMMAND_FAILED = 200
@@ -378,10 +381,7 @@ def default_source_url(info, fallback_url=""):
 
     video_id = info.get("id")
     extractor = (
-        info.get("extractor_key")
-        or info.get("ie_key")
-        or info.get("extractor")
-        or ""
+        info.get("extractor_key") or info.get("ie_key") or info.get("extractor") or ""
     )
     lower_fallback = fallback_url.lower()
     if (
@@ -409,7 +409,9 @@ def absolute_repo_path(path):
 
 
 def partial_cache_abspath_for_id(item_id):
-    return os.path.join(SONGS_DIR, f"{sanitize_cache_key(item_id)}{PARTIAL_CACHE_SUFFIX}")
+    return os.path.join(
+        SONGS_DIR, f"{sanitize_cache_key(item_id)}{PARTIAL_CACHE_SUFFIX}"
+    )
 
 
 def truncate_title(title, limit=RECENT_TITLE_LIMIT):
@@ -451,16 +453,15 @@ class TrackInfo:
 
     @classmethod
     def from_dict(cls, data):
-        track_id = sanitize_cache_key(str(data.get("id") or stable_hash(data.get("source_url", ""))))
+        track_id = sanitize_cache_key(
+            str(data.get("id") or stable_hash(data.get("source_url", "")))
+        )
         return cls(
             id=track_id,
             title=(data.get("title") or "Unknown").strip() or "Unknown",
             duration=parse_duration(data.get("duration")),
             source_url=(data.get("source_url") or "").strip(),
-            local_path=(
-                data.get("local_path")
-                or cache_relpath_for_id(track_id)
-            ),
+            local_path=(data.get("local_path") or cache_relpath_for_id(track_id)),
         )
 
 
@@ -510,7 +511,9 @@ class RecentItem:
     def from_dict(cls, data):
         return cls(
             kind=(data.get("kind") or "video").strip() or "video",
-            id=sanitize_cache_key(str(data.get("id") or stable_hash(data.get("source_url", "")))),
+            id=sanitize_cache_key(
+                str(data.get("id") or stable_hash(data.get("source_url", "")))
+            ),
             title=(data.get("title") or "Unknown").strip() or "Unknown",
             source_url=(data.get("source_url") or "").strip(),
             last_played=float(data.get("last_played") or 0.0),
@@ -971,7 +974,9 @@ class AudioEngine:
         details = {
             "seek_id": session.seek_trace_id,
             "event": event,
-            "ms": round((time.perf_counter() - session.seek_trace_started_at) * 1000, 1),
+            "ms": round(
+                (time.perf_counter() - session.seek_trace_started_at) * 1000, 1
+            ),
             "target": round(session.seek_trace_target, 3),
             "paused": bool(session.paused),
             "generation": session.decoder_generation,
@@ -997,11 +1002,9 @@ class AudioEngine:
     def _build_engine(self, session):
         engine = AVFoundation.AVAudioEngine.alloc().init()
         player = AVFoundation.AVAudioPlayerNode.alloc().init()
-        audio_format = (
-            AVFoundation.AVAudioFormat.alloc().initStandardFormatWithSampleRate_channels_(
-                float(INTERNAL_SAMPLE_RATE),
-                CHANNELS,
-            )
+        audio_format = AVFoundation.AVAudioFormat.alloc().initStandardFormatWithSampleRate_channels_(
+            float(INTERNAL_SAMPLE_RATE),
+            CHANNELS,
         )
 
         engine.attachNode_(player)
@@ -1022,7 +1025,9 @@ class AudioEngine:
 
     def _register_engine_observer(self, session):
         observer = EngineConfigurationObserver.alloc().initWithCallback_(
-            lambda sid=session.id: self._enqueue_command("route_event", "engine_config", sid)
+            lambda sid=session.id: self._enqueue_command(
+                "route_event", "engine_config", sid
+            )
         )
         self._notification_center.addObserver_selector_name_object_(
             observer,
@@ -1159,7 +1164,9 @@ class AudioEngine:
                         chunk_frames=int(len(chunk)),
                     )
 
-                while not session.stop_event.is_set() and not decoder_stop_event.is_set():
+                while (
+                    not session.stop_event.is_set() and not decoder_stop_event.is_set()
+                ):
                     try:
                         decoded_queue.put(chunk, timeout=0.1)
                         break
@@ -1180,7 +1187,9 @@ class AudioEngine:
         except Exception as exc:
             if not session.stop_event.is_set() and not decoder_stop_event.is_set():
                 log_exception("Decoder error", exc)
-                self._enqueue_command("decoder_failed", session.id, generation, str(exc))
+                self._enqueue_command(
+                    "decoder_failed", session.id, generation, str(exc)
+                )
         finally:
             self._cleanup_process(ffmpeg_process)
             self._cleanup_process(ytdlp_process)
@@ -1208,16 +1217,25 @@ class AudioEngine:
 
         self._schedule_available_buffers(session)
 
-        if not session.paused and session.scheduled_frames_total > 0 and not session.started_playback:
+        if (
+            not session.paused
+            and session.scheduled_frames_total > 0
+            and not session.started_playback
+        ):
             try:
                 session.player.play()
                 session.started_playback = True
-                if session.seek_trace_id != 0 and not session.seek_trace_player_play_logged:
+                if (
+                    session.seek_trace_id != 0
+                    and not session.seek_trace_player_play_logged
+                ):
                     session.seek_trace_player_play_logged = True
                     self._log_seek_trace(
                         session,
                         "player_play_called",
-                        scheduled_ahead_frames=int(self._scheduled_ahead_frames(session)),
+                        scheduled_ahead_frames=int(
+                            self._scheduled_ahead_frames(session)
+                        ),
                     )
                 self._publish_state(active=True, starting=False, paused=False)
             except Exception as exc:
@@ -1302,7 +1320,10 @@ class AudioEngine:
                     AVFoundation.AVAudioPlayerNodeCompletionDataPlayedBack,
                     completion_handler,
                 )
-                if session.seek_trace_id != 0 and not session.seek_trace_first_buffer_logged:
+                if (
+                    session.seek_trace_id != 0
+                    and not session.seek_trace_first_buffer_logged
+                ):
                     session.seek_trace_first_buffer_logged = True
                     scheduled_ahead_frames = int(self._scheduled_ahead_frames(session))
                     self._log_seek_trace(
@@ -1335,7 +1356,9 @@ class AudioEngine:
             self._publish_state(active=True, starting=False, paused=True)
             return
 
-        self._publish_state(active=True, starting=not session.started_playback, paused=False)
+        self._publish_state(
+            active=True, starting=not session.started_playback, paused=False
+        )
         if session.started_playback and self._scheduled_ahead_frames(session) > 0:
             try:
                 session.player.play()
@@ -1402,7 +1425,9 @@ class AudioEngine:
             return False
 
         tolerance = PCM_BUFFER_FRAMES // 2
-        return session.last_rendered_frames + tolerance >= session.scheduled_frames_total
+        return (
+            session.last_rendered_frames + tolerance >= session.scheduled_frames_total
+        )
 
     def _should_stop_for_error(self, session):
         if not session.decoder_failed:
@@ -1413,7 +1438,9 @@ class AudioEngine:
             return True
 
         tolerance = PCM_BUFFER_FRAMES // 2
-        return session.last_rendered_frames + tolerance >= session.scheduled_frames_total
+        return (
+            session.last_rendered_frames + tolerance >= session.scheduled_frames_total
+        )
 
     @staticmethod
     def _resume_request(
@@ -1828,6 +1855,7 @@ class YTBar(rumps.App):
 
         self._ensure_cache_dir()
         self._cleanup_partial_cache_files()
+        self._load_settings()
         self._load_recent_index()
         self._sweep_stale_recent_entries()
         rumps.events.before_quit.register(self._cleanup_before_quit)
@@ -1853,6 +1881,32 @@ class YTBar(rumps.App):
             "Play / Pause", callback=self.on_playpause
         )
         self._recent_menu = rumps.MenuItem("Recent")
+        self._settings_menu = rumps.MenuItem("Settings")
+        self._skip_menu = rumps.MenuItem("Skip Interval")
+        self._skip_items: dict[float, rumps.MenuItem] = {}
+        for seconds in SKIP_INTERVAL_PRESETS:
+            label = f"{int(seconds)}s"
+            item = rumps.MenuItem(
+                label,
+                callback=lambda _, s=seconds: self._on_skip_changed(s),
+            )
+            self._skip_items[seconds] = item
+            self._skip_menu[label] = item
+
+        self._recent_size_menu = rumps.MenuItem("Recent List Size")
+        self._recent_size_items: dict[int, rumps.MenuItem] = {}
+        for value in RECENT_SIZE_PRESETS:
+            label = str(value)
+            item = rumps.MenuItem(
+                label,
+                callback=lambda _, v=value: self._on_recent_limit_changed(v),
+            )
+            self._recent_size_items[value] = item
+            self._recent_size_menu[label] = item
+
+        self._settings_menu["Skip Interval"] = self._skip_menu
+        self._settings_menu["Recent List Size"] = self._recent_size_menu
+        self._apply_settings_check_marks()
         self._paste_item = rumps.MenuItem(
             "Play from Clipboard", callback=self.on_paste_url
         )
@@ -1865,6 +1919,8 @@ class YTBar(rumps.App):
             self._seek_menu,
             None,
             self._recent_menu,
+            None,
+            self._settings_menu,
             self._paste_item,
         ]
 
@@ -1951,6 +2007,40 @@ class YTBar(rumps.App):
         with self._state_lock:
             self._recent_entries = entries
 
+    def _load_settings(self):
+        self._skip_interval = DEFAULT_SKIP_INTERVAL_SECONDS
+        self._recent_limit = DEFAULT_RECENT_MENU_LIMIT
+        if not os.path.exists(SETTINGS_PATH):
+            return
+
+        try:
+            with open(SETTINGS_PATH, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            log_exception("Failed to load settings", exc)
+            return
+
+        if not isinstance(payload, dict):
+            return
+
+        skip = payload.get("skip_interval_seconds")
+        if isinstance(skip, (int, float)) and skip in SKIP_INTERVAL_PRESETS:
+            self._skip_interval = float(skip)
+
+        limit = payload.get("recent_menu_limit")
+        if isinstance(limit, int) and limit in RECENT_SIZE_PRESETS:
+            self._recent_limit = limit
+
+    def _save_settings(self):
+        payload = {
+            "skip_interval_seconds": self._skip_interval,
+            "recent_menu_limit": self._recent_limit,
+        }
+        tmp_path = f"{SETTINGS_PATH}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=True)
+        os.replace(tmp_path, SETTINGS_PATH)
+
     def _save_recent_index_locked(self):
         payload = [
             entry.to_dict()
@@ -2004,7 +2094,32 @@ class YTBar(rumps.App):
                 key=lambda entry: entry.last_played,
                 reverse=True,
             )
-        return entries[:RECENT_MENU_LIMIT]
+        return entries[: self._recent_limit]
+
+    def _apply_settings_check_marks(self):
+        for seconds, item in self._skip_items.items():
+            item.state = 1 if seconds == self._skip_interval else 0
+        for value, item in self._recent_size_items.items():
+            item.state = 1 if value == self._recent_limit else 0
+
+    def _on_skip_changed(self, seconds):
+        self._skip_interval = float(seconds)
+        self._save_settings()
+        self._apply_settings_check_marks()
+        self._update_remote_skip_intervals()
+
+    def _on_recent_limit_changed(self, value):
+        self._recent_limit = int(value)
+        self._save_settings()
+        self._apply_settings_check_marks()
+        self._rebuild_recent_menu()
+
+    @staticmethod
+    def _mark_option_alternate(menu_item):
+        menu_item._menuitem.setAlternate_(True)
+        menu_item._menuitem.setKeyEquivalentModifierMask_(
+            getattr(AppKit, "NSEventModifierFlagOption", AppKit.NSAlternateKeyMask)
+        )
 
     def _rebuild_recent_menu(self):
         entries = self._recent_entries_for_menu()
@@ -2019,17 +2134,34 @@ class YTBar(rumps.App):
             return
 
         for index, entry in enumerate(entries):
-            item = rumps.MenuItem(
-                truncate_title(entry.title),
+            title = truncate_title(entry.title)
+            play_item = rumps.MenuItem(
+                title,
                 callback=lambda _, key=entry.cache_key: self._play_recent_entry(key),
             )
-            self._recent_menu[f"recent_{index}"] = item
+            remove_item = rumps.MenuItem(
+                f"✕ {title}",
+                callback=lambda _, key=entry.cache_key: self._remove_recent_entry(key),
+            )
+            self._mark_option_alternate(remove_item)
+            self._recent_menu[f"recent_play_{index}"] = play_item
+            self._recent_menu[f"recent_remove_{index}"] = remove_item
 
         self._install_recent_menu_delegate()
 
     def _on_recent_menu_will_open(self):
         self._sweep_stale_recent_entries()
         self._rebuild_recent_menu()
+
+    def _remove_recent_entry(self, cache_key):
+        changed = False
+        with self._state_lock:
+            if cache_key in self._recent_entries:
+                del self._recent_entries[cache_key]
+                self._save_recent_index_locked()
+                changed = True
+        if changed:
+            self._rebuild_recent_menu()
 
     def _update_seek_markers(self, elapsed=0, duration=0):
         current_segment = None
@@ -2181,14 +2313,21 @@ class YTBar(rumps.App):
     def _handle_remote_skip_forward_command(self):
         if not self.engine.is_active or self.engine.duration <= 0:
             return self._remote_command_status_no_such_content()
-        self._enqueue_ui_action("remote_seek_delta", REMOTE_SKIP_INTERVAL_SECONDS)
+        self._enqueue_ui_action("remote_seek_delta", self._skip_interval)
         return self._remote_command_status_success()
 
     def _handle_remote_skip_backward_command(self):
         if not self.engine.is_active or self.engine.duration <= 0:
             return self._remote_command_status_no_such_content()
-        self._enqueue_ui_action("remote_seek_delta", -REMOTE_SKIP_INTERVAL_SECONDS)
+        self._enqueue_ui_action("remote_seek_delta", -self._skip_interval)
         return self._remote_command_status_success()
+
+    def _update_remote_skip_intervals(self):
+        center = self._remote_command_center
+        if center is None:
+            return
+        center.skipForwardCommand().setPreferredIntervals_([self._skip_interval])
+        center.skipBackwardCommand().setPreferredIntervals_([self._skip_interval])
 
     def _setup_media_player(self):
         support = load_media_player_support()
@@ -2203,8 +2342,8 @@ class YTBar(rumps.App):
             self._now_playing_info_center = (
                 support.now_playing_info_center_class.defaultCenter()
             )
-            self._remote_command_bridge = (
-                RemoteCommandBridge.alloc().initWithOwner_(self)
+            self._remote_command_bridge = RemoteCommandBridge.alloc().initWithOwner_(
+                self
             )
             self._register_remote_commands()
         except Exception as exc:
@@ -2230,12 +2369,7 @@ class YTBar(rumps.App):
             (center.nextTrackCommand(), "handleNextTrackCommand:"),
             (center.previousTrackCommand(), "handlePreviousTrackCommand:"),
         ]
-        center.skipForwardCommand().setPreferredIntervals_(
-            [REMOTE_SKIP_INTERVAL_SECONDS]
-        )
-        center.skipBackwardCommand().setPreferredIntervals_(
-            [REMOTE_SKIP_INTERVAL_SECONDS]
-        )
+        self._update_remote_skip_intervals()
         center.nextTrackCommand().setEnabled_(True)
         center.previousTrackCommand().setEnabled_(True)
 
@@ -2309,7 +2443,7 @@ class YTBar(rumps.App):
         if self.engine.is_playing:
             self.title = grid_to_braille(self.engine.dot_grid)
         elif self.engine.is_active:
-            self.title = "⣿⣿"
+            self.title = " ⣿ ⣿ "
         elif self.title != self._idle_title:
             self.title = self._idle_title
 
@@ -2634,7 +2768,9 @@ class YTBar(rumps.App):
                     with self._state_lock:
                         self._refresh_recent_from_item_locked(
                             job.item,
-                            last_played=self._latest_last_played_locked(job.item.cache_key),
+                            last_played=self._latest_last_played_locked(
+                                job.item.cache_key
+                            ),
                             remove_if_empty=False,
                         )
             finally:
