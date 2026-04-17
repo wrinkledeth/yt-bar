@@ -1,6 +1,6 @@
 # yt-bar
 
-<img src="image-2.png" alt="alt text" style="width: 75%;">
+<img src="image.png" alt="alt text" style="width: 75%;">
 
 
 yt-bar makes YouTube feel more like a real music player. It:
