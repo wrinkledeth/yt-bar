@@ -50,6 +50,7 @@
   - delayed background caching into `songs/`
   - seek controls
   - progress updates
+  - MediaPlayer remote-command / Now Playing integration
   - menu bar icon/title state
 
 ## Threading Rules
@@ -58,7 +59,7 @@
   - URL resolution
   - decoder subprocess I/O
   - the serial playback worker
-- Use the existing `_pending_ui` handoff pattern for UI mutations triggered by worker threads.
+- Use the existing `_pending_actions` queue handoff pattern for UI mutations triggered by worker threads or MediaPlayer remote-command callbacks.
 - Do not update menu items, titles, or other AppKit-driven state directly from playback or resolver threads.
 - Do not mutate playback state directly from PyObjC callbacks, CoreAudio listeners, or mixer taps; those paths enqueue work back onto `AudioEngine`'s worker.
 
@@ -71,9 +72,15 @@
 - `Recent` shows up to 10 cached logical items.
 - Playlist recents replay the cached subset of playlist tracks in order.
 - If the macOS default audio output device changes during playback, the app rebuilds the native engine and resumes the current track from the captured position.
+- Native macOS media commands integrate with the same playback helpers:
+  - play / pause / toggle play-pause
+  - skip forward `+30s`
+  - skip backward `-30s`
+- `nextTrackCommand` / `previousTrackCommand` also map to the same `±30s` seek helpers as a fallback for media surfaces that still route those actions as track-skip commands.
+- The current track is published to Control Center / Now Playing via `MPNowPlayingInfoCenter`.
 - The menu includes:
   - now playing title
-  - progress line
+  - progress line rendered as a fixed-width Unicode text bar plus elapsed/duration
   - play/pause
   - percentage-based seek submenu
   - `Recent`
@@ -84,8 +91,11 @@
   - playing: live braille stereometer
 
 ## Seek Caveats
-- Seek currently works by restarting playback with `ffmpeg -ss` on piped input.
-- That approach is functional but slow for larger offsets because `ffmpeg` must consume data to reach the target.
+- Cached/local seek now reuses the active `AVAudioEngine` graph and aggressively replaces the old local `ffmpeg` decoder, so local replay skips do not wait on the normal 2-second subprocess shutdown path.
+- Streamed seek still restarts playback with `ffmpeg -ss` on piped input.
+- The streamed path remains slower for larger offsets because `ffmpeg` must consume data to reach the target.
+- Seek now preserves paused state across both the menu submenu and media-key skip commands.
+- `SEEK_TRACE_LOGGING` in `yt_bar.py` currently emits local-seek timing milestones to stdout for debugging.
 - Playlist playback is intentionally hidden from the menu; preserve auto-advance even though there is no queue UI.
 - Playback is decoded at a fixed internal `48 kHz stereo float32` format and the engine mixer converts to the active hardware format.
 - Output-device handoff is driven by native route/config notifications, not polling.

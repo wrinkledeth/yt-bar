@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 import traceback
+from collections import deque
 from ctypes import byref, c_uint32, c_void_p
 from dataclasses import dataclass, field
 
@@ -30,7 +31,7 @@ WORKER_TICK_SECONDS = 0.05
 ROUTE_CHANGE_DEBOUNCE_SECONDS = 0.25
 ROUTE_RETRY_DELAYS = (0.35, 1.0)
 YTDLP_FIELD_SEP = "\x1f"
-PROGRESS_BAR_WIDTH = 18
+PROGRESS_BAR_WIDTH = 22
 VISUALIZER_SNAPSHOT_FRAMES = 256
 VISUALIZER_TAP_BUFFER_FRAMES = 1024
 DECODER_QUEUE_BUFFERS = 24
@@ -38,11 +39,17 @@ CACHE_DELAY_SECONDS = 10.0
 CACHE_WORKER_COUNT = 2
 RECENT_MENU_LIMIT = 10
 RECENT_TITLE_LIMIT = 55
+SEEK_TRACE_LOGGING = True
 PARTIAL_CACHE_SUFFIX = ".partial.opus"
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 SONGS_DIR_NAME = "songs"
 SONGS_DIR = os.path.join(APP_ROOT, SONGS_DIR_NAME)
 RECENT_INDEX_PATH = os.path.join(SONGS_DIR, "recent.json")
+MEDIA_PLAYER_FRAMEWORK_PATH = "/System/Library/Frameworks/MediaPlayer.framework"
+REMOTE_SKIP_INTERVAL_SECONDS = 30.0
+MP_REMOTE_COMMAND_STATUS_SUCCESS = 0
+MP_REMOTE_COMMAND_STATUS_NO_SUCH_CONTENT = 100
+MP_REMOTE_COMMAND_STATUS_COMMAND_FAILED = 200
 
 # Stereometer grid: 3 braille chars wide (6 cols) x 4 rows = 6x4 dot grid
 GRID_W = 6  # dot columns (3 braille chars x 2 cols each)
@@ -172,6 +179,7 @@ class PlaybackSession:
     id: int
     request: PlayRequest
     stop_event: threading.Event = field(default_factory=threading.Event)
+    decoder_stop_event: threading.Event | None = None
     decoded_queue: queue.Queue = field(
         default_factory=lambda: queue.Queue(maxsize=DECODER_QUEUE_BUFFERS)
     )
@@ -184,6 +192,7 @@ class PlaybackSession:
     decoder_thread: threading.Thread | None = None
     ytdlp_process: subprocess.Popen | None = None
     ffmpeg_process: subprocess.Popen | None = None
+    decoder_generation: int = 0
     decoder_eof: bool = False
     decoder_failed: bool = False
     decoder_error: str | None = None
@@ -196,6 +205,13 @@ class PlaybackSession:
     rebuild_pending: bool = False
     rebuild_deadline: float = 0.0
     completion_count: int = 0
+    seek_trace_id: int = 0
+    seek_trace_started_at: float = 0.0
+    seek_trace_target: float = 0.0
+    seek_trace_first_chunk_logged: bool = False
+    seek_trace_first_buffer_logged: bool = False
+    seek_trace_player_play_logged: bool = False
+    seek_trace_elapsed_logged: bool = False
 
     @property
     def duration(self):
@@ -260,6 +276,57 @@ class RecentMenuObserver(Foundation.NSObject):
         callback = getattr(self, "_callback", None)
         if callback:
             callback()
+
+
+class RemoteCommandBridge(Foundation.NSObject):
+    def initWithOwner_(self, owner):
+        self = objc.super(RemoteCommandBridge, self).init()
+        if self is None:
+            return None
+        self._owner = owner
+        return self
+
+    @objc.python_method
+    def _dispatch(self, method_name):
+        owner = getattr(self, "_owner", None)
+        if owner is None:
+            return 0
+        handler = getattr(owner, method_name, None)
+        if handler is None:
+            return 0
+        try:
+            return int(handler())
+        except Exception as exc:
+            log_exception(f"Remote command failed: {method_name}", exc)
+            return int(owner._remote_command_status_command_failed())
+
+    @objc.typedSelector(b"q@:@")
+    def handlePlayCommand_(self, event):
+        return self._dispatch("_handle_remote_play_command")
+
+    @objc.typedSelector(b"q@:@")
+    def handlePauseCommand_(self, event):
+        return self._dispatch("_handle_remote_pause_command")
+
+    @objc.typedSelector(b"q@:@")
+    def handleTogglePlayPauseCommand_(self, event):
+        return self._dispatch("_handle_remote_toggle_command")
+
+    @objc.typedSelector(b"q@:@")
+    def handleSkipForwardCommand_(self, event):
+        return self._dispatch("_handle_remote_skip_forward_command")
+
+    @objc.typedSelector(b"q@:@")
+    def handleSkipBackwardCommand_(self, event):
+        return self._dispatch("_handle_remote_skip_backward_command")
+
+    @objc.typedSelector(b"q@:@")
+    def handleNextTrackCommand_(self, event):
+        return self._dispatch("_handle_remote_skip_forward_command")
+
+    @objc.typedSelector(b"q@:@")
+    def handlePreviousTrackCommand_(self, event):
+        return self._dispatch("_handle_remote_skip_backward_command")
 
 
 def stable_hash(value):
@@ -429,6 +496,19 @@ class CacheJob:
     track: TrackInfo
 
 
+@dataclass(frozen=True)
+class MediaPlayerSupport:
+    command_center_class: object
+    now_playing_info_center_class: object
+    command_status_success: int
+    command_status_command_failed: int
+    command_status_no_such_content: int
+    property_elapsed_playback_time: str
+    property_playback_rate: str
+    property_title: str
+    property_playback_duration: str
+
+
 class AudioEngine:
     def __init__(self):
         self._lock = threading.RLock()
@@ -439,6 +519,7 @@ class AudioEngine:
         self._active = False
         self._starting = False
         self._paused = False
+        self._current_is_local = False
         self._duration = 0.0
         self._elapsed_seconds = 0.0
         self._dot_grid = np.zeros((GRID_W, GRID_H), dtype=np.float32)
@@ -452,6 +533,7 @@ class AudioEngine:
             AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL,
             AUDIO_OBJECT_PROPERTY_ELEMENT_MAIN,
         )
+        self._seek_trace_counter = 0
         self._pending_retry_request = None
         self._pending_retry_at = 0.0
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
@@ -517,6 +599,7 @@ class AudioEngine:
             active=True,
             starting=not paused,
             paused=paused,
+            is_local=is_local,
             duration=duration,
             elapsed=request.start_time,
             reset_grid=True,
@@ -531,6 +614,30 @@ class AudioEngine:
             self._paused = target
         self._enqueue_command("set_paused", target)
         return target
+
+    def seek_current(self, start_time):
+        with self._lock:
+            if (
+                not (self._active or self._starting)
+                or not self._current_is_local
+                or self._current_session_id == 0
+            ):
+                return False
+            paused = self._paused
+            duration = self._duration
+
+        target = max(0.0, float(start_time))
+        self._publish_state(
+            active=True,
+            starting=not paused,
+            paused=paused,
+            duration=duration,
+            elapsed=target,
+            reset_grid=True,
+            is_local=True,
+        )
+        self._enqueue_command("seek_current", target)
+        return True
 
     def stop(self):
         self._enqueue_command("stop", "user")
@@ -552,6 +659,7 @@ class AudioEngine:
         active=None,
         starting=None,
         paused=None,
+        is_local=None,
         duration=None,
         elapsed=None,
         reset_grid=False,
@@ -565,6 +673,8 @@ class AudioEngine:
                 self._starting = starting
             if paused is not None:
                 self._paused = paused
+            if is_local is not None:
+                self._current_is_local = bool(is_local)
             if duration is not None:
                 self._duration = duration
             if elapsed is not None:
@@ -580,6 +690,7 @@ class AudioEngine:
             active=False,
             starting=False,
             paused=False,
+            is_local=False,
             duration=0.0,
             elapsed=0.0,
             reset_grid=True,
@@ -648,6 +759,46 @@ class AudioEngine:
                 self._set_paused(current_session, target)
             return current_session, False
 
+        if name == "seek_current":
+            target = command[1]
+            if current_session is None or not current_session.is_local:
+                return current_session, False
+
+            self._begin_seek_trace(current_session, target)
+            request = self._resume_request(current_session, start_time=target)
+            if current_session.rebuild_pending:
+                self._log_seek_trace(
+                    current_session,
+                    "fallback_full_restart",
+                    reason="rebuild_pending",
+                )
+                self._discard_session(
+                    current_session,
+                    reason="seek_during_rebuild",
+                    clear_public_state=False,
+                    notify_stopped=False,
+                )
+                return self._attempt_start_request(request), False
+
+            try:
+                self._restart_local_decoder(current_session, target)
+                return current_session, False
+            except Exception as exc:
+                self._log_seek_trace(
+                    current_session,
+                    "fallback_full_restart",
+                    reason="fast_seek_failed",
+                    error=str(exc),
+                )
+                log_exception("Fast local seek failed", exc)
+                self._discard_session(
+                    current_session,
+                    reason="fast_seek_fallback",
+                    clear_public_state=False,
+                    notify_stopped=False,
+                )
+                return self._attempt_start_request(request), False
+
         if name == "route_event":
             reason = command[1]
             session_id = command[2]
@@ -664,14 +815,22 @@ class AudioEngine:
             return current_session, False
 
         if name == "decoder_eof":
-            session_id = command[1]
-            if current_session is not None and current_session.id == session_id:
+            session_id, generation = command[1], command[2]
+            if (
+                current_session is not None
+                and current_session.id == session_id
+                and current_session.decoder_generation == generation
+            ):
                 current_session.decoder_eof = True
             return current_session, False
 
         if name == "decoder_failed":
-            session_id, error_text = command[1], command[2]
-            if current_session is not None and current_session.id == session_id:
+            session_id, generation, error_text = command[1], command[2], command[3]
+            if (
+                current_session is not None
+                and current_session.id == session_id
+                and current_session.decoder_generation == generation
+            ):
                 current_session.decoder_failed = True
                 current_session.decoder_error = error_text
             return current_session, False
@@ -715,6 +874,7 @@ class AudioEngine:
                         active=True,
                         starting=not request.paused,
                         paused=request.paused,
+                        is_local=request.is_local,
                         duration=request.duration,
                         elapsed=request.start_time,
                     )
@@ -747,11 +907,60 @@ class AudioEngine:
             active=True,
             starting=not request.paused,
             paused=request.paused,
+            is_local=request.is_local,
             duration=request.duration,
             elapsed=request.start_time,
             reset_grid=True,
         )
         return session
+
+    def _begin_seek_trace(self, session, target):
+        if not SEEK_TRACE_LOGGING:
+            return
+
+        self._seek_trace_counter += 1
+        session.seek_trace_id = self._seek_trace_counter
+        session.seek_trace_started_at = time.perf_counter()
+        session.seek_trace_target = max(0.0, float(target))
+        session.seek_trace_first_chunk_logged = False
+        session.seek_trace_first_buffer_logged = False
+        session.seek_trace_player_play_logged = False
+        session.seek_trace_elapsed_logged = False
+        self._log_seek_trace(
+            session,
+            "requested",
+            current_elapsed=round(session.last_elapsed_seconds, 3),
+        )
+
+    def _log_seek_trace(self, session, event, **payload):
+        if not SEEK_TRACE_LOGGING or session.seek_trace_id == 0:
+            return
+
+        details = {
+            "seek_id": session.seek_trace_id,
+            "event": event,
+            "ms": round((time.perf_counter() - session.seek_trace_started_at) * 1000, 1),
+            "target": round(session.seek_trace_target, 3),
+            "paused": bool(session.paused),
+            "generation": session.decoder_generation,
+        }
+        details.update(payload)
+        print("Seek trace", details)
+
+    def _finish_seek_trace(self, session, event=None, **payload):
+        if not SEEK_TRACE_LOGGING or session.seek_trace_id == 0:
+            return
+
+        if event is not None:
+            self._log_seek_trace(session, event, **payload)
+
+        session.seek_trace_id = 0
+        session.seek_trace_started_at = 0.0
+        session.seek_trace_target = 0.0
+        session.seek_trace_first_chunk_logged = False
+        session.seek_trace_first_buffer_logged = False
+        session.seek_trace_player_play_logged = False
+        session.seek_trace_elapsed_logged = False
 
     def _build_engine(self, session):
         engine = AVFoundation.AVAudioEngine.alloc().init()
@@ -806,18 +1015,26 @@ class AudioEngine:
         session.tap_block = tap_block
 
     def _start_decoder_thread(self, session):
+        session.decoder_generation += 1
+        generation = session.decoder_generation
+        decoder_stop_event = threading.Event()
+        session.decoder_stop_event = decoder_stop_event
+        session.decoded_queue = queue.Queue(maxsize=DECODER_QUEUE_BUFFERS)
         session.decoder_thread = threading.Thread(
             target=self._decoder_loop,
-            args=(session,),
+            args=(session, generation, decoder_stop_event, session.decoded_queue),
             daemon=True,
         )
         session.decoder_thread.start()
 
-    def _decoder_loop(self, session):
+    def _decoder_loop(self, session, generation, decoder_stop_event, decoded_queue):
         ytdlp_process = None
         ffmpeg_process = None
 
         try:
+            if session.stop_event.is_set() or decoder_stop_event.is_set():
+                return
+
             ffmpeg_cmd = ["ffmpeg"]
             if session.base_offset_seconds > 0:
                 ffmpeg_cmd += ["-ss", str(session.base_offset_seconds)]
@@ -884,7 +1101,7 @@ class AudioEngine:
             session.ffmpeg_process = ffmpeg_process
 
             bytes_per_chunk = PCM_BUFFER_FRAMES * PCM_BYTES_PER_FRAME
-            while not session.stop_event.is_set():
+            while not session.stop_event.is_set() and not decoder_stop_event.is_set():
                 data = ffmpeg_process.stdout.read(bytes_per_chunk)
                 if not data:
                     break
@@ -898,15 +1115,26 @@ class AudioEngine:
                     .reshape(-1, CHANNELS)
                     .copy()
                 )
+                if (
+                    session.seek_trace_id != 0
+                    and session.decoder_generation == generation
+                    and not session.seek_trace_first_chunk_logged
+                ):
+                    session.seek_trace_first_chunk_logged = True
+                    self._log_seek_trace(
+                        session,
+                        "first_pcm_chunk",
+                        chunk_frames=int(len(chunk)),
+                    )
 
-                while not session.stop_event.is_set():
+                while not session.stop_event.is_set() and not decoder_stop_event.is_set():
                     try:
-                        session.decoded_queue.put(chunk, timeout=0.1)
+                        decoded_queue.put(chunk, timeout=0.1)
                         break
                     except queue.Full:
                         continue
 
-            if session.stop_event.is_set():
+            if session.stop_event.is_set() or decoder_stop_event.is_set():
                 return
 
             ffmpeg_code = self._wait_process(ffmpeg_process)
@@ -916,28 +1144,25 @@ class AudioEngine:
             if ytdlp_code not in (0, None):
                 raise RuntimeError(f"yt-dlp exited with status {ytdlp_code}")
 
-            self._enqueue_command("decoder_eof", session.id)
+            self._enqueue_command("decoder_eof", session.id, generation)
         except Exception as exc:
-            if not session.stop_event.is_set():
+            if not session.stop_event.is_set() and not decoder_stop_event.is_set():
                 log_exception("Decoder error", exc)
-                self._enqueue_command("decoder_failed", session.id, str(exc))
+                self._enqueue_command("decoder_failed", session.id, generation, str(exc))
         finally:
-            if session.stop_event.is_set():
-                self._cleanup_process(ffmpeg_process)
-                self._cleanup_process(ytdlp_process)
+            self._cleanup_process(ffmpeg_process)
+            self._cleanup_process(ytdlp_process)
+            if session.decoder_generation == generation:
+                session.ffmpeg_process = None
+                session.ytdlp_process = None
 
     def _service_session(self, session):
         self._refresh_elapsed(session)
 
         if session.rebuild_pending and time.monotonic() >= session.rebuild_deadline:
-            request = PlayRequest(
-                url=session.url,
-                duration=session.duration,
-                is_local=session.is_local,
+            request = self._resume_request(
+                session,
                 start_time=session.last_elapsed_seconds,
-                paused=session.paused,
-                on_finished=session.on_finished,
-                on_stopped=session.on_stopped,
                 retry_kind="route_change",
                 retry_attempt=0,
             )
@@ -955,17 +1180,19 @@ class AudioEngine:
             try:
                 session.player.play()
                 session.started_playback = True
+                if session.seek_trace_id != 0 and not session.seek_trace_player_play_logged:
+                    session.seek_trace_player_play_logged = True
+                    self._log_seek_trace(
+                        session,
+                        "player_play_called",
+                        scheduled_ahead_frames=int(self._scheduled_ahead_frames(session)),
+                    )
                 self._publish_state(active=True, starting=False, paused=False)
             except Exception as exc:
                 log_exception("AVAudioPlayerNode play failed", exc)
-                request = PlayRequest(
-                    url=session.url,
-                    duration=session.duration,
-                    is_local=session.is_local,
+                request = self._resume_request(
+                    session,
                     start_time=session.last_elapsed_seconds,
-                    paused=session.paused,
-                    on_finished=session.on_finished,
-                    on_stopped=session.on_stopped,
                     retry_kind="route_change",
                     retry_attempt=0,
                 )
@@ -1043,6 +1270,21 @@ class AudioEngine:
                     AVFoundation.AVAudioPlayerNodeCompletionDataPlayedBack,
                     completion_handler,
                 )
+                if session.seek_trace_id != 0 and not session.seek_trace_first_buffer_logged:
+                    session.seek_trace_first_buffer_logged = True
+                    scheduled_ahead_frames = int(self._scheduled_ahead_frames(session))
+                    self._log_seek_trace(
+                        session,
+                        "first_buffer_scheduled",
+                        buffer_frames=int(len(chunk)),
+                        scheduled_ahead_frames=scheduled_ahead_frames,
+                    )
+                    if session.paused:
+                        self._finish_seek_trace(
+                            session,
+                            "paused_ready",
+                            scheduled_ahead_frames=scheduled_ahead_frames,
+                        )
             except Exception as exc:
                 log_exception("scheduleBuffer failed", exc)
                 session.rebuild_pending = True
@@ -1094,6 +1336,18 @@ class AudioEngine:
                     elapsed = session.base_offset_seconds + (
                         session.last_rendered_frames / INTERNAL_SAMPLE_RATE
                     )
+                    if (
+                        session.seek_trace_id != 0
+                        and not session.seek_trace_elapsed_logged
+                        and session.last_rendered_frames > 0
+                    ):
+                        session.seek_trace_elapsed_logged = True
+                        self._finish_seek_trace(
+                            session,
+                            "first_elapsed_advance",
+                            rendered_frames=int(session.last_rendered_frames),
+                            elapsed=round(elapsed, 3),
+                        )
                 else:
                     elapsed = max(elapsed, session.base_offset_seconds)
             except Exception:
@@ -1129,6 +1383,91 @@ class AudioEngine:
         tolerance = PCM_BUFFER_FRAMES // 2
         return session.last_rendered_frames + tolerance >= session.scheduled_frames_total
 
+    @staticmethod
+    def _resume_request(
+        session,
+        *,
+        start_time=None,
+        retry_kind=None,
+        retry_attempt=0,
+    ):
+        if start_time is None:
+            start_time = session.last_elapsed_seconds
+        return PlayRequest(
+            url=session.url,
+            duration=session.duration,
+            is_local=session.is_local,
+            start_time=start_time,
+            paused=session.paused,
+            on_finished=session.on_finished,
+            on_stopped=session.on_stopped,
+            retry_kind=retry_kind,
+            retry_attempt=retry_attempt,
+        )
+
+    def _restart_local_decoder(self, session, start_time):
+        if session.player is None or session.engine is None:
+            raise RuntimeError("Local seek requires an active player node")
+
+        try:
+            session.player.stop()
+        except Exception as exc:
+            log_exception("AVAudioPlayerNode stop failed during seek", exc)
+            raise
+
+        self._stop_decoder(session, fast=True)
+        session.base_offset_seconds = max(0.0, float(start_time))
+        session.last_elapsed_seconds = session.base_offset_seconds
+        session.last_rendered_frames = 0
+        session.decoder_eof = False
+        session.decoder_failed = False
+        session.decoder_error = None
+        session.scheduled_buffers.clear()
+        session.scheduled_frames_total = 0
+        session.started_playback = False
+        session.rebuild_pending = False
+        session.rebuild_deadline = 0.0
+        self._publish_state(
+            active=True,
+            starting=not session.paused,
+            paused=session.paused,
+            is_local=True,
+            duration=session.duration,
+            elapsed=session.base_offset_seconds,
+            reset_grid=True,
+        )
+        session.engine.prepare()
+        self._start_decoder_thread(session)
+        self._log_seek_trace(
+            session,
+            "decoder_restarted",
+            start_time=round(session.base_offset_seconds, 3),
+        )
+
+    def _stop_decoder(self, session, fast=False):
+        if session.decoder_stop_event is not None:
+            session.decoder_stop_event.set()
+
+        cleanup_timeout = 0.1 if fast else 2.0
+        self._cleanup_process(
+            session.ffmpeg_process,
+            timeout=cleanup_timeout,
+            force_kill=fast,
+        )
+        self._cleanup_process(
+            session.ytdlp_process,
+            timeout=cleanup_timeout,
+            force_kill=fast,
+        )
+
+        if session.decoder_thread is not None and session.decoder_thread.is_alive():
+            session.decoder_thread.join(timeout=0.25 if fast else 1.0)
+
+        session.decoder_thread = None
+        session.decoder_stop_event = None
+        session.ffmpeg_process = None
+        session.ytdlp_process = None
+
     def _discard_session(
         self,
         session,
@@ -1157,17 +1496,16 @@ class AudioEngine:
             except Exception:
                 pass
 
+        if session.seek_trace_id != 0:
+            self._finish_seek_trace(session, "discarded", reason=reason)
+
         if session.engine is not None:
             try:
                 session.engine.stop()
             except Exception:
                 pass
 
-        self._cleanup_process(session.ffmpeg_process)
-        self._cleanup_process(session.ytdlp_process)
-
-        if session.decoder_thread is not None and session.decoder_thread.is_alive():
-            session.decoder_thread.join(timeout=1)
+        self._stop_decoder(session)
 
         if clear_public_state:
             self._publish_stopped()
@@ -1316,13 +1654,20 @@ class AudioEngine:
             return proc.poll()
 
     @staticmethod
-    def _cleanup_process(proc):
+    def _cleanup_process(proc, timeout=2.0, force_kill=False):
         if proc and proc.poll() is None:
-            proc.terminate()
             try:
-                proc.wait(timeout=2)
+                if force_kill:
+                    proc.kill()
+                else:
+                    proc.terminate()
+                proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                try:
+                    proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    pass
 
 
 def grid_to_braille(grid):
@@ -1355,18 +1700,55 @@ def parse_duration(value):
 
 
 def progress_bar(elapsed, duration, width=20):
-    if duration <= 0:
+    if duration is None or duration <= 0:
         return f"{format_time(elapsed)}"
     clamped = max(0, min(elapsed, duration))
+    if width <= 0:
+        return f"{format_time(clamped)} / {format_time(duration)}"
     frac = clamped / duration
-    if frac <= 0:
-        bar = "●" + "─" * (width - 1)
-    elif frac >= 1:
-        bar = "█" * width
-    else:
-        marker = min(width - 1, int(frac * width))
-        bar = "█" * marker + "●" + "─" * (width - marker - 1)
-    return f"{format_time(clamped)} ├{bar}┤ {format_time(duration)}"
+    playhead_pos = round(frac * (width - 1))
+    bar = "━" * playhead_pos + "●" + "─" * (width - 1 - playhead_pos)
+    return f"{bar}  {format_time(clamped)} / {format_time(duration)}"
+
+
+def load_media_player_support():
+    try:
+        bundle = objc.loadBundle(
+            "MediaPlayer",
+            globals(),
+            bundle_path=MEDIA_PLAYER_FRAMEWORK_PATH,
+        )
+        variables = {}
+        objc.loadBundleVariables(
+            bundle,
+            variables,
+            [
+                ("MPNowPlayingInfoPropertyElapsedPlaybackTime", b"@"),
+                ("MPNowPlayingInfoPropertyPlaybackRate", b"@"),
+                ("MPMediaItemPropertyTitle", b"@"),
+                ("MPMediaItemPropertyPlaybackDuration", b"@"),
+            ],
+        )
+        return MediaPlayerSupport(
+            command_center_class=objc.lookUpClass("MPRemoteCommandCenter"),
+            now_playing_info_center_class=objc.lookUpClass("MPNowPlayingInfoCenter"),
+            command_status_success=MP_REMOTE_COMMAND_STATUS_SUCCESS,
+            command_status_command_failed=MP_REMOTE_COMMAND_STATUS_COMMAND_FAILED,
+            command_status_no_such_content=MP_REMOTE_COMMAND_STATUS_NO_SUCH_CONTENT,
+            property_elapsed_playback_time=str(
+                variables["MPNowPlayingInfoPropertyElapsedPlaybackTime"]
+            ),
+            property_playback_rate=str(
+                variables["MPNowPlayingInfoPropertyPlaybackRate"]
+            ),
+            property_title=str(variables["MPMediaItemPropertyTitle"]),
+            property_playback_duration=str(
+                variables["MPMediaItemPropertyPlaybackDuration"]
+            ),
+        )
+    except Exception as exc:
+        log_exception("MediaPlayer integration unavailable", exc)
+        return None
 
 
 class YTBar(rumps.App):
@@ -1383,7 +1765,7 @@ class YTBar(rumps.App):
         self._current_item: ResolvedItem | None = None
         self._current_playback_mode = "stream"
         self._current_item_generation = 0
-        self._pending_ui = None
+        self._pending_actions = deque()
         self._recent_dirty = False
         self._recent_entries: dict[str, RecentItem] = {}
         self._item_last_played: dict[str, float] = {}
@@ -1394,6 +1776,11 @@ class YTBar(rumps.App):
         self._cache_delay_timer = None
         self._recent_menu_observer = None
         self._cleanup_done = False
+        self._media_player_support: MediaPlayerSupport | None = None
+        self._remote_command_center = None
+        self._now_playing_info_center = None
+        self._remote_command_bridge = None
+        self._remote_commands: list[object] = []
 
         self._ensure_cache_dir()
         self._cleanup_partial_cache_files()
@@ -1440,6 +1827,7 @@ class YTBar(rumps.App):
         self._rebuild_recent_menu()
         self._install_recent_menu_delegate()
         self._start_cache_workers()
+        self._setup_media_player()
 
         self._viz_timer = rumps.Timer(self._update_viz, 0.07)
         self._viz_timer.start()
@@ -1465,6 +1853,16 @@ class YTBar(rumps.App):
             if 0 <= self._current_index < len(self._tracks):
                 return self._tracks[self._current_index]
         return None
+
+    def _current_track_snapshot(self):
+        with self._state_lock:
+            if 0 <= self._current_index < len(self._tracks):
+                return self._current_index, self._tracks[self._current_index]
+        return -1, None
+
+    def _enqueue_ui_action(self, action, *payload):
+        with self._state_lock:
+            self._pending_actions.append((action, *payload))
 
     def _ensure_cache_dir(self):
         os.makedirs(SONGS_DIR, exist_ok=True)
@@ -1613,21 +2011,247 @@ class YTBar(rumps.App):
         self._update_seek_markers(elapsed, duration)
 
     def _seek_to_pct(self, pct):
-        track = self._current_track()
-        if not track or not self.engine.is_active or self.engine.duration <= 0:
+        if self.engine.duration <= 0:
             return
         target_sec = int(self.engine.duration * pct / 100)
-        with self._state_lock:
-            current_index = self._current_index
-        self._play_track(current_index, start_time=target_sec)
+        self._seek_current_track_to(target_sec)
+
+    def _play_or_resume_current_track(self):
+        if self.engine.is_active:
+            if self.engine.is_paused:
+                self.engine.toggle_pause()
+                self._sync_now_playing_info()
+            return True
+
+        current_index, track = self._current_track_snapshot()
+        if track is None:
+            return False
+        self._play_track(current_index)
+        return True
+
+    def _pause_current_track(self):
+        if not self.engine.is_active:
+            return False
+        if not self.engine.is_paused:
+            self.engine.toggle_pause()
+            self._sync_now_playing_info()
+        return True
+
+    def _toggle_play_pause(self):
+        if self.engine.is_active:
+            self.engine.toggle_pause()
+            self._sync_now_playing_info()
+            return True
+        return self._play_or_resume_current_track()
+
+    def _seek_current_track_to(self, target_sec):
+        current_index, track = self._current_track_snapshot()
+        if track is None or not self.engine.is_active:
+            return False
+
+        duration = self.engine.duration
+        if duration <= 0:
+            return False
+
+        paused = self.engine.is_paused
+        clamped = self._clamp_start_time(duration, target_sec)
+        if self.engine.seek_current(clamped):
+            self._set_progress_display(
+                elapsed=clamped,
+                duration=duration,
+            )
+            self._sync_now_playing_info()
+            return True
+
+        self._play_track(current_index, start_time=clamped, paused=paused)
+        return True
+
+    def _seek_current_track_by(self, delta_seconds):
+        if self.engine.duration <= 0:
+            return False
+        return self._seek_current_track_to(self.engine.elapsed + delta_seconds)
+
+    def _handle_stopped_ui(self):
+        if self.engine.is_active:
+            return
+        self._now_playing.title = "Not Playing"
+        self._set_progress_display()
+        self._clear_now_playing_info()
+
+    def _perform_ui_action(self, action, *payload):
+        if action == "play":
+            self._play_or_resume_current_track()
+            return
+        if action == "stopped":
+            self._handle_stopped_ui()
+            return
+        if action == "remote_play":
+            self._play_or_resume_current_track()
+            return
+        if action == "remote_pause":
+            self._pause_current_track()
+            return
+        if action == "remote_toggle":
+            self._toggle_play_pause()
+            return
+        if action == "remote_seek_delta":
+            self._seek_current_track_by(payload[0])
+
+    def _remote_command_status_success(self):
+        support = self._media_player_support
+        return 0 if support is None else support.command_status_success
+
+    def _remote_command_status_command_failed(self):
+        support = self._media_player_support
+        return 0 if support is None else support.command_status_command_failed
+
+    def _remote_command_status_no_such_content(self):
+        support = self._media_player_support
+        return 0 if support is None else support.command_status_no_such_content
+
+    def _handle_remote_play_command(self):
+        current_index, track = self._current_track_snapshot()
+        if self.engine.is_active:
+            if self.engine.is_paused:
+                self._enqueue_ui_action("remote_play")
+            return self._remote_command_status_success()
+        if track is None or current_index < 0:
+            return self._remote_command_status_no_such_content()
+        self._enqueue_ui_action("remote_play")
+        return self._remote_command_status_success()
+
+    def _handle_remote_pause_command(self):
+        if not self.engine.is_active:
+            return self._remote_command_status_no_such_content()
+        if not self.engine.is_paused:
+            self._enqueue_ui_action("remote_pause")
+        return self._remote_command_status_success()
+
+    def _handle_remote_toggle_command(self):
+        current_index, track = self._current_track_snapshot()
+        if not self.engine.is_active and (track is None or current_index < 0):
+            return self._remote_command_status_no_such_content()
+        self._enqueue_ui_action("remote_toggle")
+        return self._remote_command_status_success()
+
+    def _handle_remote_skip_forward_command(self):
+        if not self.engine.is_active or self.engine.duration <= 0:
+            return self._remote_command_status_no_such_content()
+        self._enqueue_ui_action("remote_seek_delta", REMOTE_SKIP_INTERVAL_SECONDS)
+        return self._remote_command_status_success()
+
+    def _handle_remote_skip_backward_command(self):
+        if not self.engine.is_active or self.engine.duration <= 0:
+            return self._remote_command_status_no_such_content()
+        self._enqueue_ui_action("remote_seek_delta", -REMOTE_SKIP_INTERVAL_SECONDS)
+        return self._remote_command_status_success()
+
+    def _setup_media_player(self):
+        support = load_media_player_support()
+        if support is None:
+            return
+
+        try:
+            self._media_player_support = support
+            self._remote_command_center = (
+                support.command_center_class.sharedCommandCenter()
+            )
+            self._now_playing_info_center = (
+                support.now_playing_info_center_class.defaultCenter()
+            )
+            self._remote_command_bridge = (
+                RemoteCommandBridge.alloc().initWithOwner_(self)
+            )
+            self._register_remote_commands()
+        except Exception as exc:
+            log_exception("Failed to initialize MediaPlayer integration", exc)
+            self._unregister_remote_commands()
+            self._media_player_support = None
+            self._remote_command_center = None
+            self._now_playing_info_center = None
+            self._remote_command_bridge = None
+
+    def _register_remote_commands(self):
+        center = self._remote_command_center
+        bridge = self._remote_command_bridge
+        if center is None or bridge is None:
+            return
+
+        commands = [
+            (center.playCommand(), "handlePlayCommand:"),
+            (center.pauseCommand(), "handlePauseCommand:"),
+            (center.togglePlayPauseCommand(), "handleTogglePlayPauseCommand:"),
+            (center.skipForwardCommand(), "handleSkipForwardCommand:"),
+            (center.skipBackwardCommand(), "handleSkipBackwardCommand:"),
+            (center.nextTrackCommand(), "handleNextTrackCommand:"),
+            (center.previousTrackCommand(), "handlePreviousTrackCommand:"),
+        ]
+        center.skipForwardCommand().setPreferredIntervals_(
+            [REMOTE_SKIP_INTERVAL_SECONDS]
+        )
+        center.skipBackwardCommand().setPreferredIntervals_(
+            [REMOTE_SKIP_INTERVAL_SECONDS]
+        )
+        center.nextTrackCommand().setEnabled_(True)
+        center.previousTrackCommand().setEnabled_(True)
+
+        for command, selector in commands:
+            command.addTarget_action_(bridge, selector)
+            self._remote_commands.append(command)
+
+    def _unregister_remote_commands(self):
+        bridge = self._remote_command_bridge
+        if bridge is None:
+            self._remote_commands.clear()
+            return
+        for command in self._remote_commands:
+            try:
+                command.removeTarget_(bridge)
+            except Exception:
+                pass
+        self._remote_commands.clear()
+
+    def _sync_now_playing_info(self):
+        support = self._media_player_support
+        center = self._now_playing_info_center
+        if support is None or center is None:
+            return
+
+        track = self._current_track()
+        if track is None or not self.engine.is_active:
+            self._clear_now_playing_info()
+            return
+
+        info = {
+            support.property_title: track.title,
+            support.property_elapsed_playback_time: float(self.engine.elapsed),
+            support.property_playback_rate: 0.0 if self.engine.is_paused else 1.0,
+        }
+        duration = self.engine.duration or track.duration
+        if duration > 0:
+            info[support.property_playback_duration] = float(duration)
+
+        try:
+            center.setNowPlayingInfo_(info)
+        except Exception as exc:
+            log_exception("Failed to update now playing info", exc)
+
+    def _clear_now_playing_info(self):
+        center = self._now_playing_info_center
+        if center is None:
+            return
+        try:
+            center.setNowPlayingInfo_(None)
+        except Exception as exc:
+            log_exception("Failed to clear now playing info", exc)
 
     def _update_viz(self, _):
-        pending = None
+        pending_actions = []
         rebuild_recent = False
         with self._state_lock:
-            if self._pending_ui is not None:
-                pending = self._pending_ui
-                self._pending_ui = None
+            if self._pending_actions:
+                pending_actions = list(self._pending_actions)
+                self._pending_actions.clear()
             if self._recent_dirty:
                 rebuild_recent = True
                 self._recent_dirty = False
@@ -1635,14 +2259,8 @@ class YTBar(rumps.App):
         if rebuild_recent:
             self._rebuild_recent_menu()
 
-        if pending:
-            if pending == "play":
-                with self._state_lock:
-                    index = self._current_index
-                self._play_track(index)
-            elif pending == "stopped":
-                self._now_playing.title = "Not Playing"
-                self._set_progress_display()
+        for action in pending_actions:
+            self._perform_ui_action(*action)
 
         if self.engine.is_playing:
             self.title = grid_to_braille(self.engine.dot_grid)
@@ -1658,13 +2276,12 @@ class YTBar(rumps.App):
         with self._state_lock:
             if self._current_index + 1 < len(self._tracks):
                 self._current_index += 1
-                self._pending_ui = "play"
+                self._pending_actions.append(("play",))
             else:
-                self._pending_ui = "stopped"
+                self._pending_actions.append(("stopped",))
 
     def _on_engine_stopped(self):
-        with self._state_lock:
-            self._pending_ui = "stopped"
+        self._enqueue_ui_action("stopped")
 
     def _play_track(self, index, start_time=0, paused=False):
         with self._state_lock:
@@ -1697,6 +2314,7 @@ class YTBar(rumps.App):
             elapsed=start_time,
             duration=track.duration,
         )
+        self._sync_now_playing_info()
 
     def _is_playlist_url(self, url):
         return "list=" in url or "/playlist" in url
@@ -1991,7 +2609,7 @@ class YTBar(rumps.App):
             self._current_playback_mode = playback_mode
             self._current_item_generation += 1
             generation = self._current_item_generation
-            self._pending_ui = "play"
+            self._pending_actions.append(("play",))
 
         self._record_item_played(item, last_played=last_played)
         if playback_mode == "stream":
@@ -2042,8 +2660,7 @@ class YTBar(rumps.App):
             item = self._resolve_url(url)
             if item is None:
                 if not self.engine.is_active:
-                    with self._state_lock:
-                        self._pending_ui = "stopped"
+                    self._enqueue_ui_action("stopped")
                 return
 
             playback_mode = "local" if item.is_fully_cached() else "stream"
@@ -2052,15 +2669,7 @@ class YTBar(rumps.App):
         threading.Thread(target=_resolve_and_play, daemon=True).start()
 
     def on_playpause(self, _):
-        if self.engine.is_active:
-            self.engine.toggle_pause()
-            return
-
-        with self._state_lock:
-            has_tracks = bool(self._tracks) and self._current_index >= 0
-            current_index = self._current_index
-        if has_tracks:
-            self._play_track(current_index)
+        self._toggle_play_pause()
 
     def terminate(self):
         self._cleanup_before_quit()
@@ -2071,6 +2680,9 @@ class YTBar(rumps.App):
                 return
             self._cleanup_done = True
             self._cancel_cache_delay_timer_locked()
+            self._pending_actions.clear()
+        self._clear_now_playing_info()
+        self._unregister_remote_commands()
         self._cache_shutdown.set()
         for _ in self._cache_workers:
             self._cache_jobs.put(None)

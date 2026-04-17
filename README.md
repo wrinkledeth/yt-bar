@@ -17,9 +17,18 @@ It uses:
 - Fully cached items play from local `.opus` files instead of the network.
 - `Recent` shows the 10 most recently played cached items and replays them offline.
 - Playlist recents appear as one item and replay the cached subset in playlist order.
+- The menu includes the current title, Unicode progress row, `Play / Pause`, the percentage-based `Seek` submenu, `Recent`, and `Play from Clipboard`.
 - The menu bar title shows a braille stereometer while audio is playing.
+- Native macOS media commands integrate with the same playback helpers:
+  - play / pause / toggle play-pause
+  - skip forward `+30s`
+  - skip backward `-30s`
+- `nextTrack` / `previousTrack` remote-command routes also fall back to the same `±30s` seek behavior for hardware keys and media surfaces that still send track-skip events.
+- The current track is published to Control Center / Now Playing with title, duration, elapsed time, and playback rate.
 - If the macOS default output device changes during playback, the app rebuilds the native engine and resumes from the current position.
-- Seek works by restarting playback with `ffmpeg -ss`, so large jumps can still be slow.
+- Cached/local seek now uses a dedicated fast path for offline replay, so cached skips should feel much quicker than streamed skips.
+- Streamed seek still relies on `ffmpeg -ss` against piped input, so large jumps there can still be slow.
+- Seek preserves paused state across both the menu submenu and media-key skip commands.
 
 ## Requirements
 
@@ -29,6 +38,7 @@ It uses:
 - `ffmpeg` on `PATH`
 
 Python dependencies are managed through `uv` and listed in [pyproject.toml](/Users/zen/dev/yt-bar/pyproject.toml:1).
+Media key / Now Playing integration is loaded dynamically from the system `MediaPlayer.framework`; there is no extra Python package to install for it.
 
 ## Setup
 
@@ -114,3 +124,12 @@ If the repo path or virtualenv path changes, update the plist to match.
 ```bash
 .venv/bin/python -m py_compile yt_bar.py main.py
 ```
+
+## Todo
+- add an indicator for streaming or cached playback.
+- Auto-switch to cached?
+- Optimize skipping. 
+- Rumps doesnt update in realtime. The seek bar doesnt actually move...
+- Settings? To set skip time and show deets?
+  - Add a way to delete stuff from the list.
+  - How long the recent list is.
