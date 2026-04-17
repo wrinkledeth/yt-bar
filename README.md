@@ -126,9 +126,8 @@ If the repo path or virtualenv path changes, update the plist to match.
 ```
 
 ## Todo
-- add an indicator for streaming or cached playback.
+- add an indicator for streaming or cached playback. I'm thinking at the top right maybe?
 - Auto-switch to cached?
-- Optimize skipping. 
 - Rumps doesnt update in realtime. The seek bar doesnt actually move...
 - Settings? To set skip time and show deets?
   - Add a way to delete stuff from the list.

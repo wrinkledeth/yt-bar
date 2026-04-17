@@ -329,6 +329,38 @@ class RemoteCommandBridge(Foundation.NSObject):
         return self._dispatch("_handle_remote_skip_backward_command")
 
 
+class CommonModeTimerTarget(Foundation.NSObject):
+    def initWithCallback_(self, callback):
+        self = objc.super(CommonModeTimerTarget, self).init()
+        if self is None:
+            return None
+        self._callback = callback
+        return self
+
+    @objc.typedSelector(b"v@:@")
+    def fire_(self, timer):
+        try:
+            self._callback(timer)
+        except Exception as exc:
+            log_exception("common-mode timer", exc)
+
+
+def _schedule_common_mode_timer(interval, callback):
+    target = CommonModeTimerTarget.alloc().initWithCallback_(callback)
+    timer = Foundation.NSTimer.alloc().initWithFireDate_interval_target_selector_userInfo_repeats_(
+        Foundation.NSDate.date(),
+        interval,
+        target,
+        b"fire:",
+        None,
+        True,
+    )
+    Foundation.NSRunLoop.currentRunLoop().addTimer_forMode_(
+        timer, Foundation.NSRunLoopCommonModes
+    )
+    return timer, target
+
+
 def stable_hash(value):
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:16]
 
@@ -1829,11 +1861,12 @@ class YTBar(rumps.App):
         self._start_cache_workers()
         self._setup_media_player()
 
-        self._viz_timer = rumps.Timer(self._update_viz, 0.07)
-        self._viz_timer.start()
-
-        self._progress_timer = rumps.Timer(self._update_progress, 1.0)
-        self._progress_timer.start()
+        self._viz_timer, self._viz_timer_target = _schedule_common_mode_timer(
+            0.07, self._update_viz
+        )
+        self._progress_timer, self._progress_timer_target = _schedule_common_mode_timer(
+            1.0, self._update_progress
+        )
 
     @staticmethod
     def _seek_label(index, current_segment):
@@ -2675,6 +2708,18 @@ class YTBar(rumps.App):
         self._cleanup_before_quit()
 
     def _cleanup_before_quit(self, *_args, **_kwargs):
+        # Stop main-thread timers first so no further _update_viz / _update_progress
+        # runs during teardown (they fire in event-tracking mode now too).
+        for timer_attr, target_attr in (
+            ("_viz_timer", "_viz_timer_target"),
+            ("_progress_timer", "_progress_timer_target"),
+        ):
+            timer = getattr(self, timer_attr, None)
+            if timer is not None:
+                timer.invalidate()
+            setattr(self, timer_attr, None)
+            setattr(self, target_attr, None)
+
         with self._state_lock:
             if self._cleanup_done:
                 return
