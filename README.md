@@ -1,6 +1,8 @@
 # yt-bar
 
-`yt-bar` exists because sometimes YouTube is the music app and switching back to a browser every time you want to play, pause, skip, or change outputs is annoying. It lives in the macOS menu bar, starts from the clipboard, works with the media keys, and saves tracks locally once you stream them. The whole point is: minimal clutter, fast access, no tab juggling.
+<img src="image.png" alt="alt text" style="width: 50%;">
+
+`yt-bar` reduces friction for people who use youtube as their music player. It lives in the macOS menu bar, starts from the clipboard, works with the media keys, and saves tracks locally once you stream them. The whole point is: minimal clutter, fast access, no tab juggling.
 
 ## Install
 
@@ -37,12 +39,24 @@ Remove the LaunchAgent later with:
 
 ## Usage
 
+Core: 
 - Copy a YouTube video or playlist URL and use `Play from Clipboard`.
-- Playback starts streaming immediately and the track gets saved locally after you listen, so later replays can come from disk.
-- F7 / F8 / F9 media keys work, so after playback starts the app is mostly hotkey-driven.
-- Cached/local playback seeks much faster than streamed playback.
-- If your macOS output device changes mid-playback, `yt-bar` follows it and resumes from the same spot. AirPods handoff is the intended case.
-- `Recent` replays cached items. Hold `Option` in that menu to reveal remove actions for items you do not want there anymore.
+- Playback starts streaming immediately and the track gets saved locally on listen.
+- F7 / F8 / F9 media keys to play/pause & skip forward and back. 
+- `Recent` allows for offline playback of recent tracks. (Hold `Option` in that menu to delete recent tracks)
+
+Additional: 
 - The badge next to the song title shows playback source: `◌` means streaming, `●` means local cache.
 - `Settings` lets you toggle `Compact Menu`, change skip interval seconds, and change the max recent-list size.
-- Playlists still auto-advance in order, but the queue stays hidden.
+
+## Visualizer Algorithm
+The visualizer is a tiny stereometer rendered as `3` braille characters in the menu bar. 
+
+It reads a short stereo snapshot from the `AVAudioEngine` mixer tap, converts left/right into mid/side, and plots the strongest samples into a fading `6 x 4` dot grid. 
+
+In practice this means:
+- narrow / mono material forms a tighter center trace
+- wide stereo material splays outward
+- phasey or side-heavy material pushes farther toward the edges
+
+Enjoy :)
