@@ -19,6 +19,9 @@ htmlcov/
 .claude/
 .codex/
 codex-skills/
+AGENTS.md
+handoff.md
+todo.md
 
 # Local media / scratch files
 songs/
