@@ -1,12 +1,13 @@
 # yt-bar
 
-![](image.png)
+<img src="image-2.png" alt="alt text" style="width: 75%;">
+
 
 yt-bar makes YouTube feel more like a real music player. It:
-	•	lives in the macOS menu bar
-	•	loads tracks from the clipboard
-	•	supports media keys
-	•	saves tracks locally for offline playback
+- lives in the macOS menu bar
+- loads tracks from the clipboard
+- supports media keys
+- saves tracks locally for offline playback
 
 ## Install
 
