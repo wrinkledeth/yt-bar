@@ -1,8 +1,9 @@
 # yt-bar
 
-<img src="image.png" alt="yt-bar screenshot" style="width: 75%;">
+**Frictionless YouTube listening on macOS.** 
 
-**Frictionless YouTube listening on macOS.** `yt-bar`:
+<img src="image.png" alt="yt-bar screenshot" width="680">
+
 - lives in the menu bar
 - plays tracks from the clipboard
 - supports media keys
