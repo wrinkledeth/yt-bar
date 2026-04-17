@@ -1,13 +1,12 @@
 # yt-bar
 
-<img src="image.png" alt="" style="width: 75%;">
+<img src="image.png" alt="yt-bar screenshot" style="width: 75%;">
 
-
-yt-bar makes YouTube feel more like a real music player. It:
-- lives in the macOS menu bar
-- loads tracks from the clipboard
+**Frictionless YouTube listening on macOS.** `yt-bar`:
+- lives in the menu bar
+- plays tracks from the clipboard
 - supports media keys
-- saves tracks locally for offline playback
+- caches tracks locally for offline playback
 
 ## Install
 
@@ -44,24 +43,22 @@ Remove the LaunchAgent later with:
 
 ## Usage
 
-Core: 
+Core:
 - Copy a YouTube video or playlist URL and use `Play from Clipboard`.
-- Playback starts streaming immediately and the track gets saved locally on listen.
-- F7 / F8 / F9 media keys to play/pause & skip forward and back. 
-- `Recent` allows for offline playback of recent tracks. (Hold `Option` in that menu to delete recent tracks)
+- Playback starts immediately, and the track is cached locally while you listen.
+- `Recent` lets you replay cached tracks offline.
+- Use F7 / F8 / F9 media keys to play/pause and skip forward or back.
 
-Additional: 
+Additional:
 - The badge next to the song title shows playback source: `◌` means streaming, `●` means local cache.
-- `Settings` lets you toggle `Compact Menu`, change skip interval seconds, and change the max recent-list size.
+- `Settings` lets you toggle `Compact Menu`, change skip interval seconds, and change the recent-list limit.
 
 ## Visualizer Algorithm
-The visualizer is a tiny stereometer rendered as `3` braille characters in the menu bar. 
+The visualizer is a tiny stereometer rendered as 3 braille characters in the menu bar. 
 
-It reads a short stereo snapshot from the `AVAudioEngine` mixer tap, converts left/right into mid/side, and plots the strongest samples into a fading `6 x 4` dot grid. 
+It reads a short stereo snapshot from the `AVAudioEngine` mixer tap, converts left/right into mid/side, and plots the strongest samples into a fading 4x6 dot grid. 
 
 In practice this means:
-- narrow / mono material forms a tighter center trace
+- narrow or mono material forms a tighter center trace
 - wide stereo material splays outward
 - phasey or side-heavy material pushes farther toward the edges
-
-Enjoy :)
