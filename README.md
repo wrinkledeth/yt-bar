@@ -1,8 +1,12 @@
 # yt-bar
 
-<img src="image.png" alt="alt text" style="width: 50%;">
+![](image.png)
 
-`yt-bar` reduces friction for people who use youtube as their music player. It lives in the macOS menu bar, starts from the clipboard, works with the media keys, and saves tracks locally once you stream them. The whole point is: minimal clutter, fast access, no tab juggling.
+yt-bar makes YouTube feel more like a real music player. It:
+	•	lives in the macOS menu bar
+	•	loads tracks from the clipboard
+	•	supports media keys
+	•	saves tracks locally for offline playback
 
 ## Install
 
