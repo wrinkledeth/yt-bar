@@ -1,133 +1,48 @@
 # yt-bar
 
-`yt-bar` is a macOS menu bar app that streams audio from YouTube URLs in your clipboard and caches them for offline replay.
+`yt-bar` exists because sometimes YouTube is the music app and switching back to a browser every time you want to play, pause, skip, or change outputs is annoying. It lives in the macOS menu bar, starts from the clipboard, works with the media keys, and saves tracks locally once you stream them. The whole point is: minimal clutter, fast access, no tab juggling.
 
-It uses:
-- `yt-dlp` to resolve and stream audio
-- `ffmpeg` to decode PCM
-- `rumps` for the menu bar UI
-- a native macOS `AVAudioEngine` / `AVAudioPlayerNode` backend for playback
+## Install
 
-## Current Behavior
-
-- `Play from Clipboard` reads an `http` URL from the clipboard and starts playback.
-- Single-video URLs resolve to one track.
-- Playlist URLs resolve into a hidden ordered track list and auto-advance in order.
-- Uncached items start streaming immediately, then cache into `songs/` after a short listen threshold.
-- Fully cached items play from local `.opus` files instead of the network.
-- `Recent` shows the 10 most recently played cached items and replays them offline.
-- Playlist recents appear as one item and replay the cached subset in playlist order.
-- The menu header shows the current title with a `◌` (streaming) or `●` (cached) badge, followed by the Unicode progress row. Below that: `Play / Pause`, the percentage-based `Seek` submenu, `Recent`, and `Play from Clipboard`.
-- The menu bar title shows a braille stereometer while audio is playing.
-- Native macOS media commands integrate with the same playback helpers:
-  - play / pause / toggle play-pause
-  - skip forward `+30s`
-  - skip backward `-30s`
-- `nextTrack` / `previousTrack` remote-command routes also fall back to the same `±30s` seek behavior for hardware keys and media surfaces that still send track-skip events.
-- The current track is published to Control Center / Now Playing with title, duration, elapsed time, and playback rate.
-- If the macOS default output device changes during playback, the app rebuilds the native engine and resumes from the current position.
-- Cached/local seek now uses a dedicated fast path for offline replay, so cached skips should feel much quicker than streamed skips.
-- Streamed seek still relies on `ffmpeg -ss` against piped input, so large jumps there can still be slow.
-- Seek preserves paused state across both the menu submenu and media-key skip commands.
-
-## Requirements
-
+Requirements:
 - macOS
 - Python `3.12+`
+- `uv`
 - `yt-dlp` on `PATH`
 - `ffmpeg` on `PATH`
 
-Python dependencies are managed through `uv` and listed in [pyproject.toml](/Users/zen/dev/yt-bar/pyproject.toml:1).
-Media key / Now Playing integration is loaded dynamically from the system `MediaPlayer.framework`; there is no extra Python package to install for it.
-
-## Setup
+Install the Python env:
 
 ```bash
 uv sync
 ```
 
-## Run
+Run it once directly:
 
 ```bash
 .venv/bin/python yt_bar.py
 ```
 
-or
+Or install it as a LaunchAgent so it starts cleanly in your logged-in GUI session:
 
 ```bash
-uv run python yt_bar.py
+./install.sh
 ```
 
-This must run in your logged-in macOS GUI session, not in a headless environment.
-
-## Development Notes
-
-- Real app entrypoint: [yt_bar.py](/Users/zen/dev/yt-bar/yt_bar.py:1)
-- `main.py` is currently a placeholder.
-- Cached audio and the recent index live under `songs/`.
-- Playback is decoded at a fixed internal `48 kHz stereo float32` format and the engine mixer converts to the active hardware format.
-- AppKit / `rumps` UI changes should stay on the main thread.
-
-## Launch At Login
-
-There is no in-app auto-start toggle. If you want `yt-bar` to launch at login, create a user LaunchAgent manually:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.wrinkledeth.yt-bar</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/Users/zen/dev/yt-bar/.venv/bin/python</string>
-    <string>/Users/zen/dev/yt-bar/yt_bar.py</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>ProcessType</key>
-  <string>Interactive</string>
-  <key>WorkingDirectory</key>
-  <string>/Users/zen/dev/yt-bar</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-  </dict>
-  <key>StandardOutPath</key>
-  <string>/Users/zen/dev/yt-bar/yt-bar.launchd.log</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/zen/dev/yt-bar/yt-bar.launchd.err.log</string>
-</dict>
-</plist>
-```
-
-Save it as `~/Library/LaunchAgents/com.wrinkledeth.yt-bar.plist`, then load it:
+Remove the LaunchAgent later with:
 
 ```bash
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.wrinkledeth.yt-bar.plist
-launchctl enable "gui/$(id -u)/com.wrinkledeth.yt-bar"
+./uninstall.sh
 ```
 
-To disable it later:
+## Usage
 
-```bash
-launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.wrinkledeth.yt-bar.plist
-rm ~/Library/LaunchAgents/com.wrinkledeth.yt-bar.plist
-```
-
-If the repo path or virtualenv path changes, update the plist to match.
-
-## Validation
-
-```bash
-.venv/bin/python -m py_compile yt_bar.py main.py
-```
-
-## Todo
-- Auto-switch to cached mid-track?
-- Rumps doesnt update in realtime. The seek bar doesnt actually move...
-- Settings? To set skip time and show deets?
-  - Add a way to delete stuff from the list.
-  - How long the recent list is.
+- Copy a YouTube video or playlist URL and use `Play from Clipboard`.
+- Playback starts streaming immediately and the track gets saved locally after you listen, so later replays can come from disk.
+- F7 / F8 / F9 media keys work, so after playback starts the app is mostly hotkey-driven.
+- Cached/local playback seeks much faster than streamed playback.
+- If your macOS output device changes mid-playback, `yt-bar` follows it and resumes from the same spot. AirPods handoff is the intended case.
+- `Recent` replays cached items. Hold `Option` in that menu to reveal remove actions for items you do not want there anymore.
+- The badge next to the song title shows playback source: `◌` means streaming, `●` means local cache.
+- `Settings` lets you toggle `Compact Menu`, change skip interval seconds, and change the max recent-list size.
+- Playlists still auto-advance in order, but the queue stays hidden.

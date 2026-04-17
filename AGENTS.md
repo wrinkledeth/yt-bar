@@ -28,11 +28,13 @@
 - Create/update environment: `uv sync`
 - Launch app with local venv: `.venv/bin/python yt_bar.py`
 - Alternate launch: `uv run python yt_bar.py`
+- Restart the installed menu bar app: `launchctl kickstart -k "gui/$(id -u)/com.wrinkledeth.yt-bar"`
 - Syntax check: `.venv/bin/python -m py_compile yt_bar.py main.py`
 
 ## Sandbox / Tooling Notes
 - In restricted sandboxes, `uv` may fail if its default cache directory is not writable.
 - If that happens, prefer `.venv/bin/python ...` for local checks, or set a writable cache dir such as `UV_CACHE_DIR=/tmp/uv-cache`.
+- For restarts from Codex, prefer the installed LaunchAgent instead of `nohup` or other detached shell launches. The reliable path on this machine is `launchctl kickstart -k "gui/$(id -u)/com.wrinkledeth.yt-bar"`, then verify with `launchctl print "gui/$(id -u)/com.wrinkledeth.yt-bar"` or `ps -axo pid=,command= | rg "[y]t_bar\\.py"`.
 
 ## Architecture Notes
 - `AudioEngine` owns:
@@ -81,14 +83,16 @@
 - The menu includes:
   - now playing title with a `◌` (streaming) or `●` (cached) playback-mode badge
   - progress line rendered as a fixed-width Unicode text bar plus elapsed/duration
-  - play/pause
-  - percentage-based seek submenu
-  - `Recent`
   - `Play from Clipboard`
+  - `Recent`
+  - dynamic transport item: `Pause`, `Resume`, or `Play`
+  - percentage-based `Seek` submenu, enabled only while an active track has a known duration
+  - `Settings` with `Compact Menu`, `Skip Interval`, and `Recent List Size`
+- `Compact Menu` hides the top-level transport item and `Seek`, leaving `Play from Clipboard`, `Recent`, and `Settings` as the main actionable menu items.
 - Header rows (`_now_playing`, `_progress`) use `NSAttributedString` with `secondaryLabelColor` so they render visually distinct from actionable items. They are enabled items with no-op callbacks so AppKit honors the attributed color.
 - Menu bar title states:
   - idle: `⠆⣿⠰`
-  - paused/active without animation: `⣿⣿`
+  - paused/active without animation: `⠀⠶⠀`
   - playing: live braille stereometer
 
 ## Seek Caveats
@@ -101,7 +105,7 @@
 - Playback is decoded at a fixed internal `48 kHz stereo float32` format and the engine mixer converts to the active hardware format.
 - Output-device handoff is driven by native route/config notifications, not polling.
 - Cached tracks are downloaded as `.opus` into `songs/`, first to a `.partial` filename and then atomically renamed on success.
-- Auto-start, if desired, is documented manually in `README.md` via a LaunchAgent plist; it is not exposed as an in-app menu toggle.
+- Auto-start, if desired, is handled by repo-level `install.sh` / `uninstall.sh` scripts that manage the user LaunchAgent; it is not exposed as an in-app menu toggle.
 
 ## Current Requested Direction
 - Treat `todo.md` as the current product-direction signal unless the user says otherwise.

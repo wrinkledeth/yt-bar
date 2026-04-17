@@ -63,6 +63,7 @@ DOT_BITS = [
     [0x40, 0x04, 0x02, 0x01],  # col 0 (left): bottom to top
     [0x80, 0x20, 0x10, 0x08],  # col 1 (right): bottom to top
 ]
+PAUSE_TITLE = "⠀⠶⠀"
 SAFE_CACHE_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -1882,6 +1883,9 @@ class YTBar(rumps.App):
         )
         self._recent_menu = rumps.MenuItem("Recent")
         self._settings_menu = rumps.MenuItem("Settings")
+        self._compact_menu_item = rumps.MenuItem(
+            "Compact Menu", callback=self._on_compact_menu_toggled
+        )
         self._skip_menu = rumps.MenuItem("Skip Interval")
         self._skip_items: dict[float, rumps.MenuItem] = {}
         for seconds in SKIP_INTERVAL_PRESETS:
@@ -1904,6 +1908,7 @@ class YTBar(rumps.App):
             self._recent_size_items[value] = item
             self._recent_size_menu[label] = item
 
+        self._settings_menu["Compact Menu"] = self._compact_menu_item
         self._settings_menu["Skip Interval"] = self._skip_menu
         self._settings_menu["Recent List Size"] = self._recent_size_menu
         self._apply_settings_check_marks()
@@ -1911,21 +1916,10 @@ class YTBar(rumps.App):
             "Play from Clipboard", callback=self.on_paste_url
         )
 
-        self.menu = [
-            self._now_playing,
-            self._progress,
-            None,
-            self._playpause_item,
-            self._seek_menu,
-            None,
-            self._recent_menu,
-            None,
-            self._settings_menu,
-            self._paste_item,
-        ]
-
+        self._apply_menu_layout()
         self._rebuild_recent_menu()
         self._install_recent_menu_delegate()
+        self._refresh_playback_menu_items()
         self._start_cache_workers()
         self._setup_media_player()
 
@@ -1960,6 +1954,56 @@ class YTBar(rumps.App):
             if 0 <= self._current_index < len(self._tracks):
                 return self._current_index, self._tracks[self._current_index]
         return -1, None
+
+    @staticmethod
+    def _set_menu_item_enabled(menu_item, enabled):
+        menu_item._menuitem.setEnabled_(bool(enabled))
+
+    def _apply_menu_layout(self):
+        layout = [
+            self._now_playing,
+            self._progress,
+            None,
+            self._paste_item,
+            self._recent_menu,
+            None,
+        ]
+        if not self._compact_menu:
+            layout.extend(
+                [
+                    self._playpause_item,
+                    self._seek_menu,
+                    None,
+                ]
+            )
+        layout.append(self._settings_menu)
+        self.menu.clear()
+        self.menu = layout
+
+    def _refresh_playback_menu_items(self):
+        current_index, track = self._current_track_snapshot()
+
+        if self.engine.is_active:
+            transport_title = "Resume" if self.engine.is_paused else "Pause"
+            transport_enabled = True
+        else:
+            transport_title = "Play"
+            transport_enabled = track is not None and current_index >= 0
+
+        if self._playpause_item.title != transport_title:
+            self._playpause_item.title = transport_title
+
+        if transport_enabled and self._playpause_item.callback is None:
+            self._playpause_item.set_callback(self.on_playpause)
+        elif not transport_enabled and self._playpause_item.callback is not None:
+            self._playpause_item.set_callback(None)
+
+        if self._playpause_item._menuitem.isEnabled() != transport_enabled:
+            self._set_menu_item_enabled(self._playpause_item, transport_enabled)
+
+        seek_enabled = self.engine.is_active and self.engine.duration > 0
+        if self._seek_menu._menuitem.isEnabled() != seek_enabled:
+            self._set_menu_item_enabled(self._seek_menu, seek_enabled)
 
     def _enqueue_ui_action(self, action, *payload):
         with self._state_lock:
@@ -2010,6 +2054,7 @@ class YTBar(rumps.App):
     def _load_settings(self):
         self._skip_interval = DEFAULT_SKIP_INTERVAL_SECONDS
         self._recent_limit = DEFAULT_RECENT_MENU_LIMIT
+        self._compact_menu = False
         if not os.path.exists(SETTINGS_PATH):
             return
 
@@ -2031,10 +2076,15 @@ class YTBar(rumps.App):
         if isinstance(limit, int) and limit in RECENT_SIZE_PRESETS:
             self._recent_limit = limit
 
+        compact = payload.get("compact_menu")
+        if isinstance(compact, bool):
+            self._compact_menu = compact
+
     def _save_settings(self):
         payload = {
             "skip_interval_seconds": self._skip_interval,
             "recent_menu_limit": self._recent_limit,
+            "compact_menu": self._compact_menu,
         }
         tmp_path = f"{SETTINGS_PATH}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as handle:
@@ -2097,10 +2147,19 @@ class YTBar(rumps.App):
         return entries[: self._recent_limit]
 
     def _apply_settings_check_marks(self):
+        self._compact_menu_item.state = 1 if self._compact_menu else 0
         for seconds, item in self._skip_items.items():
             item.state = 1 if seconds == self._skip_interval else 0
         for value, item in self._recent_size_items.items():
             item.state = 1 if value == self._recent_limit else 0
+
+    def _on_compact_menu_toggled(self, _):
+        self._compact_menu = not self._compact_menu
+        self._save_settings()
+        self._apply_settings_check_marks()
+        self._apply_menu_layout()
+        self._install_recent_menu_delegate()
+        self._refresh_playback_menu_items()
 
     def _on_skip_changed(self, seconds):
         self._skip_interval = float(seconds)
@@ -2440,10 +2499,12 @@ class YTBar(rumps.App):
         for action in pending_actions:
             self._perform_ui_action(*action)
 
+        self._refresh_playback_menu_items()
+
         if self.engine.is_playing:
             self.title = grid_to_braille(self.engine.dot_grid)
         elif self.engine.is_active:
-            self.title = " ⣿ ⣿ "
+            self.title = PAUSE_TITLE
         elif self.title != self._idle_title:
             self.title = self._idle_title
 

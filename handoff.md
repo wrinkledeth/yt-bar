@@ -1,7 +1,7 @@
 # yt-bar Handoff
 
 ## What it is
-macOS menu bar music streamer. Copy a YouTube URL, click "Play from Clipboard", audio streams via yt-dlp -> ffmpeg -> a native `AVAudioEngine` / `AVAudioPlayerNode` backend. Played items cache into `songs/` for offline replay and a `Recent` submenu surfaces the last 10 cached logical items. Playlist URLs still play in order, but the playlist itself is hidden from the main playback UI. Playback follows macOS default output changes by rebuilding the engine and resuming from the captured position. Auto-start is documented manually in the README via a LaunchAgent plist rather than exposed in the app UI.
+macOS menu bar music streamer. Copy a YouTube URL, click "Play from Clipboard", audio streams via yt-dlp -> ffmpeg -> a native `AVAudioEngine` / `AVAudioPlayerNode` backend. Played items cache into `songs/` for offline replay and a `Recent` submenu surfaces the last 10 cached logical items. Playlist URLs still play in order, but the playlist itself is hidden from the main playback UI. Playback follows macOS default output changes by rebuilding the engine and resuming from the captured position. Auto-start is handled by repo-level LaunchAgent install scripts rather than an in-app toggle.
 
 ## Architecture
 - **Single file**: `yt_bar.py`
@@ -26,17 +26,21 @@ macOS menu bar music streamer. Copy a YouTube URL, click "Play from Clipboard", 
 Now Playing: Song Title
 ━━━━━━●───────────────  0:45 / 3:00
 ---
-Play / Pause
-Seek (submenu with 0%-90% clickable segments)
+Play from Clipboard
 Recent (submenu with cached items)
 ---
-Play from Clipboard
+Pause / Resume / Play
+Seek (submenu with 0%-90% clickable segments)
+---
+Settings
 ```
+
+With `Compact Menu` enabled, the `Pause / Resume / Play` row and `Seek` submenu are removed from the top level, leaving `Play from Clipboard`, `Recent`, and `Settings`.
 
 ## Icons
 - Idle: `⠆⣿⠰`
 - Playing: live braille stereometer (Mid/Side dot cloud)
-- Paused: `⣿⣿`
+- Paused: `⠀⠶⠀`
 
 ## Seek Implementation
 - `_seek_to_pct(pct)`: uses a fast local-seek path for cached tracks and falls back to full playback restart for streamed tracks
@@ -74,6 +78,11 @@ Play from Clipboard
 uv run python yt_bar.py
 ```
 
+## Restarting
+- Prefer LaunchAgent restart for manual testing from Codex: `launchctl kickstart -k "gui/$(id -u)/com.wrinkledeth.yt-bar"`
+- Verify it with `launchctl print "gui/$(id -u)/com.wrinkledeth.yt-bar"` or `ps -axo pid=,command= | rg "[y]t_bar\\.py"`
+- Detached `nohup ... yt_bar.py &` launches from the agent environment may exit immediately even when foreground launch works
+
 ## Recent Changes
 1. Fixed background-thread UI crash: all menu modifications now dispatched to main thread via a pending-action handoff
 2. Idle icon changed to `⠆⣿⠰`
@@ -82,7 +91,7 @@ uv run python yt_bar.py
 5. Replaced `sounddevice` / PortAudio with a native `AVAudioEngine` backend, plus CoreAudio default-output listening and engine-configuration rebuilds
 6. Stereometer now reads from an `AVAudioEngine` mixer tap instead of the old output stream write loop
 7. Added `songs/`-backed offline caching plus a `Recent` submenu for cached video and playlist replay
-8. Removed the in-app launch-at-login toggle and documented manual LaunchAgent setup in the README instead
+8. Removed the in-app launch-at-login toggle; repo-level install scripts now manage the LaunchAgent setup instead
 9. Replaced the old bracketed progress bar with a fixed-width Unicode text row: `━━━━●────  elapsed / duration`
 10. Added native macOS media-command support and Control Center Now Playing integration while keeping the existing `Seek` submenu
 11. Fixed cached local seek latency by bypassing the old 2-second decoder shutdown wait before starting the replacement local decoder
