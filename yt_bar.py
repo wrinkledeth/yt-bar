@@ -1,5 +1,9 @@
 import ctypes
+import hashlib
+import json
+import os
 import queue
+import re
 import signal
 import subprocess
 import threading
@@ -30,6 +34,15 @@ PROGRESS_BAR_WIDTH = 18
 VISUALIZER_SNAPSHOT_FRAMES = 256
 VISUALIZER_TAP_BUFFER_FRAMES = 1024
 DECODER_QUEUE_BUFFERS = 24
+CACHE_DELAY_SECONDS = 10.0
+CACHE_WORKER_COUNT = 2
+RECENT_MENU_LIMIT = 10
+RECENT_TITLE_LIMIT = 55
+PARTIAL_CACHE_SUFFIX = ".partial.opus"
+APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+SONGS_DIR_NAME = "songs"
+SONGS_DIR = os.path.join(APP_ROOT, SONGS_DIR_NAME)
+RECENT_INDEX_PATH = os.path.join(SONGS_DIR, "recent.json")
 
 # Stereometer grid: 3 braille chars wide (6 cols) x 4 rows = 6x4 dot grid
 GRID_W = 6  # dot columns (3 braille chars x 2 cols each)
@@ -40,6 +53,7 @@ DOT_BITS = [
     [0x40, 0x04, 0x02, 0x01],  # col 0 (left): bottom to top
     [0x80, 0x20, 0x10, 0x08],  # col 1 (right): bottom to top
 ]
+SAFE_CACHE_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _fourcc(value):
@@ -144,6 +158,7 @@ def log_exception(context, exc):
 class PlayRequest:
     url: str
     duration: float
+    is_local: bool = False
     start_time: float = 0.0
     paused: bool = False
     on_finished: object = None
@@ -191,6 +206,10 @@ class PlaybackSession:
         return self.request.url
 
     @property
+    def is_local(self):
+        return self.request.is_local
+
+    @property
     def paused(self):
         return self.request.paused
 
@@ -227,6 +246,187 @@ class EngineConfigurationObserver(Foundation.NSObject):
         callback = getattr(self, "_callback", None)
         if callback:
             callback()
+
+
+class RecentMenuObserver(Foundation.NSObject):
+    def initWithCallback_(self, callback):
+        self = objc.super(RecentMenuObserver, self).init()
+        if self is None:
+            return None
+        self._callback = callback
+        return self
+
+    def menuWillOpen_(self, menu):
+        callback = getattr(self, "_callback", None)
+        if callback:
+            callback()
+
+
+def stable_hash(value):
+    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:16]
+
+
+def sanitize_cache_key(value):
+    cleaned = SAFE_CACHE_KEY_RE.sub("_", value or "").strip("._")
+    return cleaned or stable_hash(value or "track")
+
+
+def default_source_url(info, fallback_url=""):
+    for key in ("webpage_url", "original_url", "url"):
+        value = info.get(key)
+        if isinstance(value, str) and value.startswith("http"):
+            return value
+
+    video_id = info.get("id")
+    extractor = (
+        info.get("extractor_key")
+        or info.get("ie_key")
+        or info.get("extractor")
+        or ""
+    )
+    lower_fallback = fallback_url.lower()
+    if (
+        isinstance(video_id, str)
+        and video_id
+        and (
+            "youtube" in str(extractor).lower()
+            or "youtube.com" in lower_fallback
+            or "youtu.be" in lower_fallback
+        )
+    ):
+        return f"https://www.youtube.com/watch?v={video_id}"
+
+    return fallback_url
+
+
+def cache_relpath_for_id(item_id):
+    return os.path.join(SONGS_DIR_NAME, f"{sanitize_cache_key(item_id)}.opus")
+
+
+def absolute_repo_path(path):
+    if os.path.isabs(path):
+        return path
+    return os.path.join(APP_ROOT, path)
+
+
+def partial_cache_abspath_for_id(item_id):
+    return os.path.join(SONGS_DIR, f"{sanitize_cache_key(item_id)}{PARTIAL_CACHE_SUFFIX}")
+
+
+def truncate_title(title, limit=RECENT_TITLE_LIMIT):
+    text = (title or "").strip() or "Unknown"
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return text[:limit]
+    return f"{text[: limit - 1]}…"
+
+
+@dataclass
+class TrackInfo:
+    id: str
+    title: str
+    duration: float
+    source_url: str
+    local_path: str
+
+    @property
+    def absolute_local_path(self):
+        return absolute_repo_path(self.local_path)
+
+    @property
+    def partial_local_path(self):
+        return partial_cache_abspath_for_id(self.id)
+
+    def is_cached(self):
+        return os.path.exists(self.absolute_local_path)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "duration": self.duration,
+            "source_url": self.source_url,
+            "local_path": self.local_path,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        track_id = sanitize_cache_key(str(data.get("id") or stable_hash(data.get("source_url", ""))))
+        return cls(
+            id=track_id,
+            title=(data.get("title") or "Unknown").strip() or "Unknown",
+            duration=parse_duration(data.get("duration")),
+            source_url=(data.get("source_url") or "").strip(),
+            local_path=(
+                data.get("local_path")
+                or cache_relpath_for_id(track_id)
+            ),
+        )
+
+
+@dataclass
+class ResolvedItem:
+    kind: str
+    id: str
+    title: str
+    source_url: str
+    tracks: list[TrackInfo]
+
+    @property
+    def cache_key(self):
+        return f"{self.kind}:{self.id}"
+
+    def is_fully_cached(self):
+        return bool(self.tracks) and all(track.is_cached() for track in self.tracks)
+
+    def cached_tracks(self):
+        return [track for track in self.tracks if track.is_cached()]
+
+
+@dataclass
+class RecentItem:
+    kind: str
+    id: str
+    title: str
+    source_url: str
+    last_played: float
+    tracks: list[TrackInfo]
+
+    @property
+    def cache_key(self):
+        return f"{self.kind}:{self.id}"
+
+    def to_dict(self):
+        return {
+            "kind": self.kind,
+            "id": self.id,
+            "title": self.title,
+            "source_url": self.source_url,
+            "last_played": self.last_played,
+            "tracks": [track.to_dict() for track in self.tracks],
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            kind=(data.get("kind") or "video").strip() or "video",
+            id=sanitize_cache_key(str(data.get("id") or stable_hash(data.get("source_url", "")))),
+            title=(data.get("title") or "Unknown").strip() or "Unknown",
+            source_url=(data.get("source_url") or "").strip(),
+            last_played=float(data.get("last_played") or 0.0),
+            tracks=[
+                TrackInfo.from_dict(track_data)
+                for track_data in data.get("tracks", [])
+                if isinstance(track_data, dict)
+            ],
+        )
+
+
+@dataclass
+class CacheJob:
+    item: ResolvedItem
+    track: TrackInfo
 
 
 class AudioEngine:
@@ -299,12 +499,14 @@ class AudioEngine:
         on_finished=None,
         on_stopped=None,
         duration=0,
+        is_local=False,
         start_time=0,
         paused=False,
     ):
         request = PlayRequest(
             url=url,
             duration=duration,
+            is_local=is_local,
             start_time=max(0.0, float(start_time)),
             paused=paused,
             on_finished=on_finished,
@@ -497,6 +699,7 @@ class AudioEngine:
                     next_request = PlayRequest(
                         url=request.url,
                         duration=request.duration,
+                        is_local=request.is_local,
                         start_time=request.start_time,
                         paused=request.paused,
                         on_finished=request.on_finished,
@@ -615,37 +818,67 @@ class AudioEngine:
         ffmpeg_process = None
 
         try:
-            ytdlp_process = subprocess.Popen(
-                ["yt-dlp", "-f", "bestaudio", "-o", "-", "--no-warnings", session.url],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
             ffmpeg_cmd = ["ffmpeg"]
             if session.base_offset_seconds > 0:
                 ffmpeg_cmd += ["-ss", str(session.base_offset_seconds)]
-            ffmpeg_cmd += [
-                "-i",
-                "pipe:0",
-                "-f",
-                "f32le",
-                "-acodec",
-                "pcm_f32le",
-                "-ac",
-                str(CHANNELS),
-                "-ar",
-                str(INTERNAL_SAMPLE_RATE),
-                "-loglevel",
-                "error",
-                "-",
-            ]
-            ffmpeg_process = subprocess.Popen(
-                ffmpeg_cmd,
-                stdin=ytdlp_process.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-            if ytdlp_process.stdout is not None:
-                ytdlp_process.stdout.close()
+            if session.is_local:
+                ffmpeg_cmd += [
+                    "-i",
+                    session.url,
+                    "-f",
+                    "f32le",
+                    "-acodec",
+                    "pcm_f32le",
+                    "-ac",
+                    str(CHANNELS),
+                    "-ar",
+                    str(INTERNAL_SAMPLE_RATE),
+                    "-loglevel",
+                    "error",
+                    "-",
+                ]
+                ffmpeg_process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                ytdlp_process = subprocess.Popen(
+                    [
+                        "yt-dlp",
+                        "-f",
+                        "bestaudio",
+                        "-o",
+                        "-",
+                        "--no-warnings",
+                        session.url,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+                ffmpeg_cmd += [
+                    "-i",
+                    "pipe:0",
+                    "-f",
+                    "f32le",
+                    "-acodec",
+                    "pcm_f32le",
+                    "-ac",
+                    str(CHANNELS),
+                    "-ar",
+                    str(INTERNAL_SAMPLE_RATE),
+                    "-loglevel",
+                    "error",
+                    "-",
+                ]
+                ffmpeg_process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdin=ytdlp_process.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+                if ytdlp_process.stdout is not None:
+                    ytdlp_process.stdout.close()
 
             session.ytdlp_process = ytdlp_process
             session.ffmpeg_process = ffmpeg_process
@@ -700,6 +933,7 @@ class AudioEngine:
             request = PlayRequest(
                 url=session.url,
                 duration=session.duration,
+                is_local=session.is_local,
                 start_time=session.last_elapsed_seconds,
                 paused=session.paused,
                 on_finished=session.on_finished,
@@ -727,6 +961,7 @@ class AudioEngine:
                 request = PlayRequest(
                     url=session.url,
                     duration=session.duration,
+                    is_local=session.is_local,
                     start_time=session.last_elapsed_seconds,
                     paused=session.paused,
                     on_finished=session.on_finished,
@@ -1112,6 +1347,13 @@ def format_time(seconds):
     return f"{m}:{s:02d}"
 
 
+def parse_duration(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def progress_bar(elapsed, duration, width=20):
     if duration <= 0:
         return f"{format_time(elapsed)}"
@@ -1133,11 +1375,31 @@ class YTBar(rumps.App):
 
         self.title = "⠆⣿⠰"
         self._idle_title = "⠆⣿⠰"
+        self._state_lock = threading.RLock()
 
         self.engine = AudioEngine()
-        self._tracks = []
+        self._tracks: list[TrackInfo] = []
         self._current_index = -1
+        self._current_item: ResolvedItem | None = None
+        self._current_playback_mode = "stream"
+        self._current_item_generation = 0
         self._pending_ui = None
+        self._recent_dirty = False
+        self._recent_entries: dict[str, RecentItem] = {}
+        self._item_last_played: dict[str, float] = {}
+        self._scheduled_cache_track_ids: set[str] = set()
+        self._cache_jobs: queue.Queue = queue.Queue()
+        self._cache_shutdown = threading.Event()
+        self._cache_workers = []
+        self._cache_delay_timer = None
+        self._recent_menu_observer = None
+        self._cleanup_done = False
+
+        self._ensure_cache_dir()
+        self._cleanup_partial_cache_files()
+        self._load_recent_index()
+        self._sweep_stale_recent_entries()
+        rumps.events.before_quit.register(self._cleanup_before_quit)
 
         self._now_playing = rumps.MenuItem("Not Playing")
         self._now_playing.set_callback(None)
@@ -1154,11 +1416,12 @@ class YTBar(rumps.App):
                 callback=lambda _, p=pct: self._seek_to_pct(p),
             )
             self._seek_items.append(item)
-            self._seek_menu[item.title] = item
+            self._seek_menu[f"seek_{pct}"] = item
 
         self._playpause_item = rumps.MenuItem(
             "Play / Pause", callback=self.on_playpause
         )
+        self._recent_menu = rumps.MenuItem("Recent")
         self._paste_item = rumps.MenuItem(
             "Play from Clipboard", callback=self.on_paste_url
         )
@@ -1170,8 +1433,13 @@ class YTBar(rumps.App):
             self._playpause_item,
             self._seek_menu,
             None,
+            self._recent_menu,
             self._paste_item,
         ]
+
+        self._rebuild_recent_menu()
+        self._install_recent_menu_delegate()
+        self._start_cache_workers()
 
         self._viz_timer = rumps.Timer(self._update_viz, 0.07)
         self._viz_timer.start()
@@ -1185,17 +1453,140 @@ class YTBar(rumps.App):
         marker = "●" if index == current_segment else "○"
         return f"  {marker} {pct}%"
 
-    def _current_track(self):
-        if 0 <= self._current_index < len(self._tracks):
-            return self._tracks[self._current_index]
-        return None
-
     @staticmethod
     def _clamp_start_time(duration, start_time):
         if duration <= 0:
             return max(0.0, start_time)
         max_start = max(0.0, duration - 0.25)
         return max(0.0, min(start_time, max_start))
+
+    def _current_track(self):
+        with self._state_lock:
+            if 0 <= self._current_index < len(self._tracks):
+                return self._tracks[self._current_index]
+        return None
+
+    def _ensure_cache_dir(self):
+        os.makedirs(SONGS_DIR, exist_ok=True)
+
+    def _cleanup_partial_cache_files(self):
+        for name in os.listdir(SONGS_DIR):
+            if name.endswith(PARTIAL_CACHE_SUFFIX):
+                path = os.path.join(SONGS_DIR, name)
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+    def _start_cache_workers(self):
+        for _ in range(CACHE_WORKER_COUNT):
+            worker = threading.Thread(target=self._cache_worker_loop, daemon=True)
+            worker.start()
+            self._cache_workers.append(worker)
+
+    def _load_recent_index(self):
+        if not os.path.exists(RECENT_INDEX_PATH):
+            return
+
+        try:
+            with open(RECENT_INDEX_PATH, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            log_exception("Failed to load recent index", exc)
+            return
+
+        if not isinstance(payload, list):
+            return
+
+        entries = {}
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            recent = RecentItem.from_dict(item)
+            if recent.tracks:
+                entries[recent.cache_key] = recent
+        with self._state_lock:
+            self._recent_entries = entries
+
+    def _save_recent_index_locked(self):
+        payload = [
+            entry.to_dict()
+            for entry in sorted(
+                self._recent_entries.values(),
+                key=lambda entry: entry.last_played,
+                reverse=True,
+            )
+        ]
+        tmp_path = f"{RECENT_INDEX_PATH}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=True)
+        os.replace(tmp_path, RECENT_INDEX_PATH)
+
+    def _install_recent_menu_delegate(self):
+        if self._recent_menu._menu is None:
+            return
+        observer = RecentMenuObserver.alloc().initWithCallback_(
+            self._on_recent_menu_will_open
+        )
+        self._recent_menu._menu.setDelegate_(observer)
+        self._recent_menu_observer = observer
+
+    def _mark_recent_dirty_locked(self):
+        self._recent_dirty = True
+
+    def _sweep_stale_recent_entries_locked(self):
+        changed = False
+        for key, entry in list(self._recent_entries.items()):
+            valid_tracks = [track for track in entry.tracks if track.is_cached()]
+            if not valid_tracks:
+                del self._recent_entries[key]
+                changed = True
+                continue
+            if len(valid_tracks) != len(entry.tracks):
+                entry.tracks = valid_tracks
+                changed = True
+        if changed:
+            self._save_recent_index_locked()
+            self._mark_recent_dirty_locked()
+        return changed
+
+    def _sweep_stale_recent_entries(self):
+        with self._state_lock:
+            return self._sweep_stale_recent_entries_locked()
+
+    def _recent_entries_for_menu(self):
+        with self._state_lock:
+            entries = sorted(
+                self._recent_entries.values(),
+                key=lambda entry: entry.last_played,
+                reverse=True,
+            )
+        return entries[:RECENT_MENU_LIMIT]
+
+    def _rebuild_recent_menu(self):
+        entries = self._recent_entries_for_menu()
+        if self._recent_menu._menu is not None:
+            self._recent_menu.clear()
+
+        if not entries:
+            placeholder = rumps.MenuItem("No recent items")
+            placeholder.set_callback(None)
+            self._recent_menu["recent_empty"] = placeholder
+            self._install_recent_menu_delegate()
+            return
+
+        for index, entry in enumerate(entries):
+            item = rumps.MenuItem(
+                truncate_title(entry.title),
+                callback=lambda _, key=entry.cache_key: self._play_recent_entry(key),
+            )
+            self._recent_menu[f"recent_{index}"] = item
+
+        self._install_recent_menu_delegate()
+
+    def _on_recent_menu_will_open(self):
+        self._sweep_stale_recent_entries()
+        self._rebuild_recent_menu()
 
     def _update_seek_markers(self, elapsed=0, duration=0):
         current_segment = None
@@ -1226,14 +1617,29 @@ class YTBar(rumps.App):
         if not track or not self.engine.is_active or self.engine.duration <= 0:
             return
         target_sec = int(self.engine.duration * pct / 100)
-        self._play_track(self._current_index, start_time=target_sec)
+        with self._state_lock:
+            current_index = self._current_index
+        self._play_track(current_index, start_time=target_sec)
 
     def _update_viz(self, _):
-        pending = self._pending_ui
+        pending = None
+        rebuild_recent = False
+        with self._state_lock:
+            if self._pending_ui is not None:
+                pending = self._pending_ui
+                self._pending_ui = None
+            if self._recent_dirty:
+                rebuild_recent = True
+                self._recent_dirty = False
+
+        if rebuild_recent:
+            self._rebuild_recent_menu()
+
         if pending:
-            self._pending_ui = None
             if pending == "play":
-                self._play_track(self._current_index)
+                with self._state_lock:
+                    index = self._current_index
+                self._play_track(index)
             elif pending == "stopped":
                 self._now_playing.title = "Not Playing"
                 self._set_progress_display()
@@ -1249,46 +1655,53 @@ class YTBar(rumps.App):
         self._set_progress_display()
 
     def _on_track_finished(self):
-        if self._current_index + 1 < len(self._tracks):
-            self._current_index += 1
-            self._pending_ui = "play"
-        else:
-            self._pending_ui = "stopped"
+        with self._state_lock:
+            if self._current_index + 1 < len(self._tracks):
+                self._current_index += 1
+                self._pending_ui = "play"
+            else:
+                self._pending_ui = "stopped"
 
     def _on_engine_stopped(self):
-        self._pending_ui = "stopped"
+        with self._state_lock:
+            self._pending_ui = "stopped"
 
     def _play_track(self, index, start_time=0, paused=False):
-        if index < 0 or index >= len(self._tracks):
-            return
-        track = self._tracks[index]
-        start_time = self._clamp_start_time(track.get("duration", 0), start_time)
-        self._current_index = index
-        self._now_playing.title = track["title"]
+        with self._state_lock:
+            if index < 0 or index >= len(self._tracks):
+                return
+            track = self._tracks[index]
+            playback_mode = self._current_playback_mode
+            self._current_index = index
+
+        start_time = self._clamp_start_time(track.duration, start_time)
+        self._now_playing.title = track.title
+
+        if playback_mode == "local" and track.local_path:
+            source = track.absolute_local_path
+            is_local = True
+        else:
+            source = track.source_url
+            is_local = False
+
         self.engine.play(
-            track["url"],
+            source,
             on_finished=self._on_track_finished,
             on_stopped=self._on_engine_stopped,
-            duration=track.get("duration", 0),
+            duration=track.duration,
+            is_local=is_local,
             start_time=start_time,
             paused=paused,
         )
         self._set_progress_display(
             elapsed=start_time,
-            duration=track.get("duration", 0),
+            duration=track.duration,
         )
 
     def _is_playlist_url(self, url):
         return "list=" in url or "/playlist" in url
 
-    @staticmethod
-    def _parse_duration(value):
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return 0
-
-    def _run_yt_dlp(self, args, timeout):
+    def _run_yt_dlp_json(self, args, timeout):
         try:
             result = subprocess.run(
                 args,
@@ -1305,73 +1718,320 @@ class YTBar(rumps.App):
             print(f"yt-dlp failed for {args[-1]}: {error_text}")
             return None
 
-        return result
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            log_exception("yt-dlp JSON parse failure", exc)
+            return None
+
+    def _track_from_info(self, info, fallback_url, default_title="Unknown"):
+        source_url = default_source_url(info, fallback_url).strip()
+        if not source_url:
+            return None
+
+        raw_id = str(info.get("id") or stable_hash(source_url))
+        track_id = sanitize_cache_key(raw_id)
+        return TrackInfo(
+            id=track_id,
+            title=(info.get("title") or default_title).strip() or default_title,
+            duration=parse_duration(info.get("duration")),
+            source_url=source_url,
+            local_path=cache_relpath_for_id(track_id),
+        )
+
+    def _resolve_playlist(self, url):
+        info = self._run_yt_dlp_json(
+            ["yt-dlp", "-J", "--flat-playlist", "--no-warnings", url],
+            timeout=60,
+        )
+        if not isinstance(info, dict):
+            return None
+
+        tracks = []
+        for index, entry in enumerate(info.get("entries") or []):
+            if not isinstance(entry, dict):
+                continue
+            track = self._track_from_info(
+                entry,
+                url,
+                default_title=f"Track {index + 1}",
+            )
+            if track is None:
+                continue
+            tracks.append(track)
+
+        if not tracks:
+            print(f"yt-dlp returned no playlist entries for {url}")
+            return None
+
+        playlist_id = sanitize_cache_key(str(info.get("id") or stable_hash(url)))
+        return ResolvedItem(
+            kind="playlist",
+            id=playlist_id,
+            title=(info.get("title") or "Playlist").strip() or "Playlist",
+            source_url=default_source_url(info, url) or url,
+            tracks=tracks,
+        )
+
+    def _resolve_single(self, url):
+        info = self._run_yt_dlp_json(
+            ["yt-dlp", "-J", "--no-playlist", "--no-warnings", url],
+            timeout=30,
+        )
+        if not isinstance(info, dict):
+            return None
+
+        track = self._track_from_info(info, url)
+        if track is None:
+            return None
+
+        return ResolvedItem(
+            kind="video",
+            id=track.id,
+            title=track.title,
+            source_url=track.source_url,
+            tracks=[track],
+        )
 
     def _resolve_url(self, url):
         if self._is_playlist_url(url):
-            result = self._run_yt_dlp(
-                [
-                    "yt-dlp",
-                    "--flat-playlist",
-                    "--print",
-                    (
-                        f"%(webpage_url)s{YTDLP_FIELD_SEP}"
-                        f"%(title)s{YTDLP_FIELD_SEP}%(duration)s"
-                    ),
-                    "--no-warnings",
-                    url,
-                ],
-                timeout=60,
-            )
-            if result:
-                tracks = []
-                for line in result.stdout.splitlines():
-                    if not line.strip():
-                        continue
-                    parts = line.split(YTDLP_FIELD_SEP)
-                    track_url = parts[0].strip() if parts else url
-                    if not track_url.startswith("http"):
-                        track_url = url
-                    title = (
-                        parts[1].strip()
-                        if len(parts) > 1 and parts[1].strip()
-                        else "Unknown"
-                    )
-                    duration = self._parse_duration(parts[2] if len(parts) > 2 else 0)
-                    tracks.append(
-                        {
-                            "url": track_url,
-                            "title": title,
-                            "duration": duration,
-                        }
-                    )
-                if tracks:
-                    return tracks
-                print(f"yt-dlp returned no playlist entries for {url}")
-
-        result = self._run_yt_dlp(
-            [
-                "yt-dlp",
-                "--print",
-                f"%(title)s{YTDLP_FIELD_SEP}%(duration)s",
-                "--no-warnings",
-                "--no-download",
-                "--no-playlist",
-                url,
-            ],
-            timeout=15,
-        )
-        if not result or not result.stdout.strip():
-            return []
-
-        parts = result.stdout.strip().split(YTDLP_FIELD_SEP)
-        title = parts[0].strip() if parts and parts[0].strip() else "Unknown"
-        duration = self._parse_duration(parts[1] if len(parts) > 1 else 0)
-        return [{"url": url, "title": title, "duration": duration}]
+            item = self._resolve_playlist(url)
+            if item is not None:
+                return item
+        return self._resolve_single(url)
 
     def _get_clipboard(self):
         pb = AppKit.NSPasteboard.generalPasteboard()
         return pb.stringForType_(AppKit.NSStringPboardType) or ""
+
+    def _latest_last_played_locked(self, item_key):
+        return self._item_last_played.get(item_key, time.time())
+
+    def _refresh_recent_from_item_locked(
+        self,
+        item,
+        *,
+        last_played=None,
+        remove_if_empty=False,
+    ):
+        cached_tracks = item.cached_tracks()
+        item_key = item.cache_key
+        existing = self._recent_entries.get(item_key)
+        effective_last_played = (
+            last_played
+            if last_played is not None
+            else (
+                existing.last_played
+                if existing is not None
+                else self._latest_last_played_locked(item_key)
+            )
+        )
+
+        if item.kind == "video" and cached_tracks:
+            cached_tracks = [cached_tracks[0]]
+
+        if not cached_tracks:
+            if remove_if_empty and existing is not None:
+                del self._recent_entries[item_key]
+                self._save_recent_index_locked()
+                self._mark_recent_dirty_locked()
+                return True
+            return False
+
+        updated = RecentItem(
+            kind=item.kind,
+            id=item.id,
+            title=item.title,
+            source_url=item.source_url,
+            last_played=effective_last_played,
+            tracks=cached_tracks,
+        )
+
+        if existing is not None and existing.to_dict() == updated.to_dict():
+            return False
+
+        self._recent_entries[item_key] = updated
+        self._save_recent_index_locked()
+        self._mark_recent_dirty_locked()
+        return True
+
+    def _record_item_played(self, item, *, last_played=None):
+        timestamp = time.time() if last_played is None else last_played
+        with self._state_lock:
+            self._item_last_played[item.cache_key] = timestamp
+            self._refresh_recent_from_item_locked(
+                item,
+                last_played=timestamp,
+                remove_if_empty=False,
+            )
+
+    def _cancel_cache_delay_timer_locked(self):
+        timer = self._cache_delay_timer
+        self._cache_delay_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _enqueue_cache_jobs_for_item(self, item):
+        with self._state_lock:
+            self._refresh_recent_from_item_locked(
+                item,
+                last_played=self._latest_last_played_locked(item.cache_key),
+                remove_if_empty=False,
+            )
+            for track in item.tracks:
+                if track.is_cached() or not track.source_url:
+                    continue
+                if track.id in self._scheduled_cache_track_ids:
+                    continue
+                self._scheduled_cache_track_ids.add(track.id)
+                self._cache_jobs.put(CacheJob(item=item, track=track))
+
+    def _schedule_delayed_cache(self, item, generation):
+        with self._state_lock:
+            self._cancel_cache_delay_timer_locked()
+            timer = threading.Timer(
+                CACHE_DELAY_SECONDS,
+                lambda: self._start_cache_if_still_current(item, generation),
+            )
+            timer.daemon = True
+            self._cache_delay_timer = timer
+            timer.start()
+
+    def _start_cache_if_still_current(self, item, generation):
+        with self._state_lock:
+            is_current_item = (
+                generation == self._current_item_generation
+                and self._current_item is not None
+                and self._current_item.cache_key == item.cache_key
+                and self._current_playback_mode == "stream"
+            )
+        if not is_current_item or not (self.engine.is_active or self.engine.is_paused):
+            return
+        self._enqueue_cache_jobs_for_item(item)
+
+    def _download_track_cache(self, track):
+        final_path = track.absolute_local_path
+        partial_path = track.partial_local_path
+        output_template = os.path.join(SONGS_DIR, f"{track.id}.partial.%(ext)s")
+
+        if os.path.exists(final_path):
+            return True
+
+        try:
+            os.remove(partial_path)
+        except OSError:
+            pass
+
+        result = subprocess.run(
+            [
+                "yt-dlp",
+                "--no-warnings",
+                "--no-playlist",
+                "-x",
+                "--audio-format",
+                "opus",
+                "-o",
+                output_template,
+                track.source_url,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            error_text = result.stderr.strip() or "unknown yt-dlp failure"
+            print(f"cache download failed for {track.source_url}: {error_text}")
+            try:
+                os.remove(partial_path)
+            except OSError:
+                pass
+            return False
+
+        if os.path.exists(partial_path):
+            os.replace(partial_path, final_path)
+
+        if not os.path.exists(final_path):
+            print(f"cache download produced no file for {track.source_url}")
+            return False
+
+        return True
+
+    def _cache_worker_loop(self):
+        while not self._cache_shutdown.is_set():
+            try:
+                job = self._cache_jobs.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            if job is None:
+                self._cache_jobs.task_done()
+                break
+
+            try:
+                if self._download_track_cache(job.track):
+                    with self._state_lock:
+                        self._refresh_recent_from_item_locked(
+                            job.item,
+                            last_played=self._latest_last_played_locked(job.item.cache_key),
+                            remove_if_empty=False,
+                        )
+            finally:
+                with self._state_lock:
+                    self._scheduled_cache_track_ids.discard(job.track.id)
+                self._cache_jobs.task_done()
+
+    def _start_item_playback(self, item, *, playback_mode):
+        last_played = time.time()
+        self.engine.stop()
+
+        with self._state_lock:
+            self._current_item = item
+            self._tracks = list(item.tracks)
+            self._current_index = 0
+            # Do not reroute a live stream to local mid-track. Cache only affects future plays.
+            self._current_playback_mode = playback_mode
+            self._current_item_generation += 1
+            generation = self._current_item_generation
+            self._pending_ui = "play"
+
+        self._record_item_played(item, last_played=last_played)
+        if playback_mode == "stream":
+            self._schedule_delayed_cache(item, generation)
+        else:
+            with self._state_lock:
+                self._cancel_cache_delay_timer_locked()
+
+    def _recent_entry_to_item_locked(self, entry):
+        valid_tracks = [track for track in entry.tracks if track.is_cached()]
+        if not valid_tracks:
+            del self._recent_entries[entry.cache_key]
+            self._save_recent_index_locked()
+            self._mark_recent_dirty_locked()
+            return None
+
+        if len(valid_tracks) != len(entry.tracks):
+            entry.tracks = valid_tracks
+            self._save_recent_index_locked()
+            self._mark_recent_dirty_locked()
+
+        return ResolvedItem(
+            kind=entry.kind,
+            id=entry.id,
+            title=entry.title,
+            source_url=entry.source_url,
+            tracks=list(valid_tracks),
+        )
+
+    def _play_recent_entry(self, item_key):
+        with self._state_lock:
+            entry = self._recent_entries.get(item_key)
+            if entry is None:
+                return
+            item = self._recent_entry_to_item_locked(entry)
+
+        if item is None:
+            return
+
+        self._start_item_playback(item, playback_mode="local")
 
     def on_paste_url(self, _):
         url = self._get_clipboard().strip().replace("\\", "")
@@ -1379,27 +2039,44 @@ class YTBar(rumps.App):
             return
 
         def _resolve_and_play():
-            tracks = self._resolve_url(url)
-            if not tracks:
+            item = self._resolve_url(url)
+            if item is None:
                 if not self.engine.is_active:
-                    self._pending_ui = "stopped"
+                    with self._state_lock:
+                        self._pending_ui = "stopped"
                 return
-            self.engine.stop()
-            self._tracks = tracks
-            self._current_index = 0
-            self._pending_ui = "play"
+
+            playback_mode = "local" if item.is_fully_cached() else "stream"
+            self._start_item_playback(item, playback_mode=playback_mode)
 
         threading.Thread(target=_resolve_and_play, daemon=True).start()
 
     def on_playpause(self, _):
         if self.engine.is_active:
             self.engine.toggle_pause()
-        elif self._tracks and self._current_index >= 0:
-            self._play_track(self._current_index)
+            return
+
+        with self._state_lock:
+            has_tracks = bool(self._tracks) and self._current_index >= 0
+            current_index = self._current_index
+        if has_tracks:
+            self._play_track(current_index)
 
     def terminate(self):
+        self._cleanup_before_quit()
+
+    def _cleanup_before_quit(self, *_args, **_kwargs):
+        with self._state_lock:
+            if self._cleanup_done:
+                return
+            self._cleanup_done = True
+            self._cancel_cache_delay_timer_locked()
+        self._cache_shutdown.set()
+        for _ in self._cache_workers:
+            self._cache_jobs.put(None)
+        for worker in self._cache_workers:
+            worker.join(timeout=1)
         self.engine.close()
-        super().terminate()
 
 
 def _signal_handler(sig, frame):

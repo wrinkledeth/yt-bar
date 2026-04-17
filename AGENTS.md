@@ -9,6 +9,7 @@
 ## What This Repo Does
 - `yt-bar` is a macOS menu bar app that streams audio from YouTube URLs copied to the clipboard.
 - Playback flows through `yt-dlp` to `ffmpeg`, then into a native macOS `AVAudioEngine` / `AVAudioPlayerNode` backend.
+- Played items can be cached under `songs/` for later offline replay.
 - The menu bar title shows a braille stereometer while audio is playing.
 
 ## Runtime Dependencies
@@ -35,7 +36,7 @@
 
 ## Architecture Notes
 - `AudioEngine` owns:
-  - the `yt-dlp -> ffmpeg -> AVAudioEngine` pipeline
+  - the `yt-dlp/ffmpeg or local-file/ffmpeg -> AVAudioEngine` pipeline
   - playback state
   - a single serial playback worker
   - elapsed time tracking from `AVAudioPlayerNode` timing
@@ -45,6 +46,8 @@
   - the `rumps` menu bar app
   - clipboard URL intake
   - hidden ordered playlist state
+  - recent-index persistence in `songs/recent.json`
+  - delayed background caching into `songs/`
   - seek controls
   - progress updates
   - menu bar icon/title state
@@ -63,12 +66,17 @@
 - `Play from Clipboard` reads the clipboard and starts playback for an `http` URL.
 - Single-video URLs resolve to one track.
 - Playlist URLs resolve into a hidden ordered track list and auto-advance through tracks.
+- Uncached items start streaming immediately and are cached in the background after a short listen threshold.
+- Fully cached items can replay from local `.opus` files without network access.
+- `Recent` shows up to 10 cached logical items.
+- Playlist recents replay the cached subset of playlist tracks in order.
 - If the macOS default audio output device changes during playback, the app rebuilds the native engine and resumes the current track from the captured position.
 - The menu includes:
   - now playing title
   - progress line
   - play/pause
   - percentage-based seek submenu
+  - `Recent`
   - `Play from Clipboard`
 - Menu bar title states:
   - idle: `⠆⣿⠰`
@@ -81,6 +89,8 @@
 - Playlist playback is intentionally hidden from the menu; preserve auto-advance even though there is no queue UI.
 - Playback is decoded at a fixed internal `48 kHz stereo float32` format and the engine mixer converts to the active hardware format.
 - Output-device handoff is driven by native route/config notifications, not polling.
+- Cached tracks are downloaded as `.opus` into `songs/`, first to a `.partial` filename and then atomically renamed on success.
+- Auto-start, if desired, is documented manually in `README.md` via a LaunchAgent plist; it is not exposed as an in-app menu toggle.
 
 ## Current Requested Direction
 - The active TODOs are:

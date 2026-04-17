@@ -1,7 +1,7 @@
 # yt-bar Handoff
 
 ## What it is
-macOS menu bar music streamer. Copy a YouTube URL, click "Play from Clipboard", audio streams via yt-dlp -> ffmpeg -> a native `AVAudioEngine` / `AVAudioPlayerNode` backend. Braille stereometer visualization in the menu bar icon. Playlist URLs still play in order, but the playlist itself is now hidden from the UI. Playback follows macOS default output changes by rebuilding the engine and resuming from the captured position.
+macOS menu bar music streamer. Copy a YouTube URL, click "Play from Clipboard", audio streams via yt-dlp -> ffmpeg -> a native `AVAudioEngine` / `AVAudioPlayerNode` backend. Played items cache into `songs/` for offline replay and a `Recent` submenu surfaces the last 10 cached logical items. Playlist URLs still play in order, but the playlist itself is hidden from the main playback UI. Playback follows macOS default output changes by rebuilding the engine and resuming from the captured position. Auto-start is documented manually in the README via a LaunchAgent plist rather than exposed in the app UI.
 
 ## Architecture
 - **Single file**: `yt_bar.py`
@@ -13,7 +13,7 @@ macOS menu bar music streamer. Copy a YouTube URL, click "Play from Clipboard", 
 
 ## Key Classes
 - `AudioEngine`: manages yt-dlp -> ffmpeg -> AVFoundation pipeline, owns the serial playback worker, CoreAudio route handling, native timing, and mixer-tap visualizer snapshots
-- `YTBar(rumps.App)`: menu bar UI, hidden playlist state, timers for viz (70ms) and progress (1s)
+- `YTBar(rumps.App)`: menu bar UI, hidden playlist state, delayed background cache workers, recent-index persistence, timers for viz (70ms) and progress (1s)
 
 ## Threading Model
 - **Main thread**: rumps event loop, all UI modifications
@@ -28,6 +28,7 @@ Now Playing: Song Title
 ---
 Play / Pause
 Seek (submenu with 0%-90% clickable segments)
+Recent (submenu with cached items)
 ---
 Play from Clipboard
 ```
@@ -45,6 +46,7 @@ Play from Clipboard
 ## Known Issues / Future Work
 - Seek via `-ss` on piped ffmpeg is slow for large offsets
 - Route changes still require a brief rebuild/restart; this is correctness-first, not gapless handoff
+- First-play caching still uses a second yt-dlp fetch after the listen threshold; there is no tee/single-fetch cache path yet
 - No skip/previous buttons (only play/pause + seek submenu)
 - No volume control (intentional per user preference)
 - Playlist playback is hidden; there is no visible queue/count indicator
@@ -66,3 +68,5 @@ uv run python yt_bar.py
 4. Fixed per-track progress to stay aligned after seek and refreshed the progress bar styling
 5. Replaced `sounddevice` / PortAudio with a native `AVAudioEngine` backend, plus CoreAudio default-output listening and engine-configuration rebuilds
 6. Stereometer now reads from an `AVAudioEngine` mixer tap instead of the old output stream write loop
+7. Added `songs/`-backed offline caching plus a `Recent` submenu for cached video and playlist replay
+8. Removed the in-app launch-at-login toggle and documented manual LaunchAgent setup in the README instead
