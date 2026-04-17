@@ -17,7 +17,7 @@ It uses:
 - Fully cached items play from local `.opus` files instead of the network.
 - `Recent` shows the 10 most recently played cached items and replays them offline.
 - Playlist recents appear as one item and replay the cached subset in playlist order.
-- The menu includes the current title, Unicode progress row, `Play / Pause`, the percentage-based `Seek` submenu, `Recent`, and `Play from Clipboard`.
+- The menu header shows the current title with a `◌` (streaming) or `●` (cached) badge, followed by the Unicode progress row. Below that: `Play / Pause`, the percentage-based `Seek` submenu, `Recent`, and `Play from Clipboard`.
 - The menu bar title shows a braille stereometer while audio is playing.
 - Native macOS media commands integrate with the same playback helpers:
   - play / pause / toggle play-pause
@@ -126,8 +126,7 @@ If the repo path or virtualenv path changes, update the plist to match.
 ```
 
 ## Todo
-- add an indicator for streaming or cached playback. I'm thinking at the top right maybe?
-- Auto-switch to cached?
+- Auto-switch to cached mid-track?
 - Rumps doesnt update in realtime. The seek bar doesnt actually move...
 - Settings? To set skip time and show deets?
   - Add a way to delete stuff from the list.

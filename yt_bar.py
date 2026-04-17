@@ -1731,6 +1731,18 @@ def parse_duration(value):
         return 0.0
 
 
+def _set_header_title(menu_item, primary, trailing=None):
+    """Render a header menu-item at secondaryLabelColor brightness."""
+    text = primary + ("  " + trailing if trailing else "")
+    s = Foundation.NSMutableAttributedString.alloc().initWithString_(text)
+    s.addAttribute_value_range_(
+        AppKit.NSForegroundColorAttributeName,
+        AppKit.NSColor.secondaryLabelColor(),
+        Foundation.NSRange(0, s.length()),
+    )
+    menu_item._menuitem.setAttributedTitle_(s)
+
+
 def progress_bar(elapsed, duration, width=20):
     if duration is None or duration <= 0:
         return f"{format_time(elapsed)}"
@@ -1821,10 +1833,10 @@ class YTBar(rumps.App):
         rumps.events.before_quit.register(self._cleanup_before_quit)
 
         self._now_playing = rumps.MenuItem("Not Playing")
-        self._now_playing.set_callback(None)
+        self._now_playing.set_callback(lambda *_: None)
 
         self._progress = rumps.MenuItem("")
-        self._progress.set_callback(None)
+        self._progress.set_callback(lambda *_: None)
 
         self._seek_menu = rumps.MenuItem("Seek")
         self._seek_items = []
@@ -2030,16 +2042,15 @@ class YTBar(rumps.App):
     def _set_progress_display(self, elapsed=None, duration=None):
         if elapsed is None:
             if not self.engine.is_active:
-                self._progress.title = ""
+                _set_header_title(self._progress, "")
                 self._update_seek_markers()
                 return
             elapsed = self.engine.elapsed
         if duration is None:
             duration = self.engine.duration
-        self._progress.title = progress_bar(
-            elapsed,
-            duration,
-            width=PROGRESS_BAR_WIDTH,
+        _set_header_title(
+            self._progress,
+            progress_bar(elapsed, duration, width=PROGRESS_BAR_WIDTH),
         )
         self._update_seek_markers(elapsed, duration)
 
@@ -2107,7 +2118,7 @@ class YTBar(rumps.App):
     def _handle_stopped_ui(self):
         if self.engine.is_active:
             return
-        self._now_playing.title = "Not Playing"
+        _set_header_title(self._now_playing, "Not Playing")
         self._set_progress_display()
         self._clear_now_playing_info()
 
@@ -2325,7 +2336,8 @@ class YTBar(rumps.App):
             self._current_index = index
 
         start_time = self._clamp_start_time(track.duration, start_time)
-        self._now_playing.title = track.title
+        badge = "◌" if playback_mode == "stream" else "●"
+        _set_header_title(self._now_playing, track.title, trailing=badge)
 
         if playback_mode == "local" and track.local_path:
             source = track.absolute_local_path

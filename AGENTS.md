@@ -79,12 +79,13 @@
 - `nextTrackCommand` / `previousTrackCommand` also map to the same `±30s` seek helpers as a fallback for media surfaces that still route those actions as track-skip commands.
 - The current track is published to Control Center / Now Playing via `MPNowPlayingInfoCenter`.
 - The menu includes:
-  - now playing title
+  - now playing title with a `◌` (streaming) or `●` (cached) playback-mode badge
   - progress line rendered as a fixed-width Unicode text bar plus elapsed/duration
   - play/pause
   - percentage-based seek submenu
   - `Recent`
   - `Play from Clipboard`
+- Header rows (`_now_playing`, `_progress`) use `NSAttributedString` with `secondaryLabelColor` so they render visually distinct from actionable items. They are enabled items with no-op callbacks so AppKit honors the attributed color.
 - Menu bar title states:
   - idle: `⠆⣿⠰`
   - paused/active without animation: `⣿⣿`
@@ -103,9 +104,6 @@
 - Auto-start, if desired, is documented manually in `README.md` via a LaunchAgent plist; it is not exposed as an in-app menu toggle.
 
 ## Current Requested Direction
-- The active TODOs are:
-  - add a toggle for animation
-  - change the starting icon to `⣿⣿`
 - Treat `todo.md` as the current product-direction signal unless the user says otherwise.
 
 ## Editing Guidance
