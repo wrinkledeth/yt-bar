@@ -235,10 +235,31 @@ class YTBar(rumps.App):
         self._play_track(current_index, start_time=clamped, paused=paused)
         return True
 
+    def _skip_forward_to_next_track(self):
+        paused = self.engine.is_paused
+        with self._state_lock:
+            next_index = self._current_index + 1
+            if next_index >= len(self._tracks):
+                next_index = None
+
+        if next_index is None:
+            self.engine.stop()
+            self._handle_stopped_ui()
+            return True
+
+        self._play_track(next_index, start_time=0, paused=paused)
+        return True
+
     def _seek_current_track_by(self, delta_seconds):
-        if self.engine.duration <= 0:
+        duration = self.engine.duration
+        if duration <= 0:
             return False
-        return self._seek_current_track_to(self.engine.elapsed + delta_seconds)
+
+        target = self.engine.elapsed + delta_seconds
+        if delta_seconds > 0 and target >= duration:
+            return self._skip_forward_to_next_track()
+
+        return self._seek_current_track_to(target)
 
     def _handle_stopped_ui(self):
         if self.engine.is_active:
