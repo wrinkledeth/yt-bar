@@ -30,6 +30,12 @@ Run it once directly:
 .venv/bin/python yt_bar.py
 ```
 
+Alternate package entrypoint:
+
+```bash
+uv run python -m yt_bar
+```
+
 Or install it as a LaunchAgent so it starts cleanly in your logged-in GUI session:
 
 ```bash
@@ -53,6 +59,7 @@ Core:
 Additional:
 - The badge next to the song title shows playback source: `◌` means streaming, `●` means local cache.
 - `Settings` lets you toggle `Compact Menu`, change skip interval seconds, and change the recent-list limit.
+- Cached media, the recent list, and settings are stored under `songs/`.
 
 ## Visualizer Algorithm
 The visualizer is a tiny stereometer rendered as 3 braille characters in the menu bar. 
