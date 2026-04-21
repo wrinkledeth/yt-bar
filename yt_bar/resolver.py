@@ -2,7 +2,13 @@ import json
 import subprocess
 
 from .models import ResolvedItem, TrackInfo
-from .utils import cache_relpath_for_id, log_exception, parse_duration, sanitize_cache_key, stable_hash
+from .utils import (
+    cache_relpath_for_id,
+    log_exception,
+    parse_duration,
+    sanitize_cache_key,
+    stable_hash,
+)
 
 
 def default_source_url(info, fallback_url=""):
@@ -12,9 +18,7 @@ def default_source_url(info, fallback_url=""):
             return value
 
     video_id = info.get("id")
-    extractor = (
-        info.get("extractor_key") or info.get("ie_key") or info.get("extractor") or ""
-    )
+    extractor = info.get("extractor_key") or info.get("ie_key") or info.get("extractor") or ""
     lower_fallback = fallback_url.lower()
     if (
         isinstance(video_id, str)

@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+## Agent Rules
+- Ask before risky, irreversible, or user-intent-sensitive choices. Otherwise, make a reversible assumption, state it, and continue.
+- Preserve unrelated work; do not revert, commit, or push unless asked.
+
 ## Project Structure & Entry Points
 - `yt_bar.py` is the LaunchAgent-compatible entry shim; keep it present because `install.sh` points at it.
 - `yt_bar/app.py` contains `YTBar(rumps.App)` and `main()`.
@@ -18,6 +22,8 @@
 ## Runtime Dependencies
 - Python: `3.12+`
 - Python packages: managed by `uv` and listed in `pyproject.toml`
+- Use `uv run` for project commands unless the environment has already been synced and activated.
+- Use the project-local `.venv`; do not rely on global Python packages.
 - Native playback bindings:
   - `pyobjc-framework-AVFoundation`
 - External binaries required on `PATH`:
@@ -26,13 +32,22 @@
 - macOS GUI requirements:
   - The app depends on `rumps` and AppKit.
   - Run it from the logged-in user session, not from a headless environment.
+- Never commit secrets. Document required environment variables in `.env.example`, and keep real `.env` files out of git.
+- Ask before changing the Python version, package manager, or tool configuration. Add task-required dependencies when needed, and report them.
 
 ## Development Commands
 - Create/update environment: `uv sync`
 - Launch app with local venv: `.venv/bin/python yt_bar.py`
 - Alternate launch: `uv run python yt_bar.py`
+- Test: `uv run pytest -q`
+- Lint: `uv run ruff check .`
+- Format check: `uv run ruff format --check .`
+- Fix lint issues when requested: `uv run ruff check --fix .`
+- Format code when requested: `uv run ruff format .`
+- Type-check only if a type checker is configured; none is configured currently.
 - Restart the installed menu bar app: `launchctl kickstart -k "gui/$(id -u)/com.wrinkledeth.yt-bar"`
 - Syntax check: `.venv/bin/python -m compileall yt_bar.py yt_bar`
+- Prefer file-scoped checks while iterating, for example `uv run pytest tests/test_smoke.py -q`, `uv run ruff check yt_bar/app.py`, and `uv run ruff format --check yt_bar/app.py`.
 
 ## Sandbox / Tooling Notes
 - In restricted sandboxes, `uv` may fail if its default cache directory is not writable.
@@ -114,14 +129,22 @@
 - Treat `todo.md` as the current product-direction signal unless the user says otherwise.
 
 ## Editing Guidance
+- Read existing docs and config before changing behavior.
+- Prefer existing project commands over introducing new tools.
+- Keep changes scoped to the requested task.
 - Keep changes concentrated in the package module that owns the affected subsystem; preserve the root `yt_bar.py` shim.
 - Preserve the main-thread UI safety model when changing playback or menu flow.
 - Prefer small, explicit helpers over adding more stateful branching inline.
 - If you change visible menu behavior, update `AGENTS.md` and `README.md` if the guidance here or user-facing docs become stale.
+- If a command fails, report the command and relevant failure instead of guessing at the result.
+- Report exactly which checks you ran and which relevant checks you skipped.
 
 ## Validation Expectations
-- There is no automated test suite yet.
-- For code changes, at minimum:
-  - run a syntax check
-  - verify the app launches on macOS
-  - manually test the affected menu actions and title/icon states
+- The automated suite currently starts with an import smoke test in `tests/test_smoke.py`.
+- For Python changes, run the relevant focused pytest/Ruff checks first.
+- Before handoff after broad code changes, run:
+  - `uv run pytest -q`
+  - `uv run ruff check .`
+  - `uv run ruff format --check .`
+  - `.venv/bin/python -m compileall yt_bar.py yt_bar`
+- For app behavior changes, also verify the app launches on macOS and manually test the affected menu actions and title/icon states.

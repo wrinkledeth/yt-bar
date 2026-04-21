@@ -32,9 +32,7 @@ class MenuController:
             self.seek_items.append(item)
             self.seek_menu[f"seek_{pct}"] = item
 
-        self.playpause_item = rumps.MenuItem(
-            "Play / Pause", callback=self.app.on_playpause
-        )
+        self.playpause_item = rumps.MenuItem("Play / Pause", callback=self.app.on_playpause)
         self.recent_menu = rumps.MenuItem("Recent")
         self.settings_menu = rumps.MenuItem("Settings")
         self.compact_menu_item = rumps.MenuItem(
@@ -65,9 +63,7 @@ class MenuController:
         self.settings_menu["Compact Menu"] = self.compact_menu_item
         self.settings_menu["Skip Interval"] = self.skip_menu
         self.settings_menu["Recent List Size"] = self.recent_size_menu
-        self.paste_item = rumps.MenuItem(
-            "Play from Clipboard", callback=self.app.on_paste_url
-        )
+        self.paste_item = rumps.MenuItem("Play from Clipboard", callback=self.app.on_paste_url)
 
     @staticmethod
     def seek_label(index, current_segment):
@@ -128,9 +124,7 @@ class MenuController:
     def install_recent_menu_delegate(self):
         if self.recent_menu._menu is None:
             return
-        observer = RecentMenuObserver.alloc().initWithCallback_(
-            self.app._on_recent_menu_will_open
-        )
+        observer = RecentMenuObserver.alloc().initWithCallback_(self.app._on_recent_menu_will_open)
         self.recent_menu._menu.setDelegate_(observer)
         self._recent_menu_observer = observer
 
@@ -164,15 +158,11 @@ class MenuController:
             title = truncate_title(entry.title)
             play_item = rumps.MenuItem(
                 title,
-                callback=lambda _, key=entry.cache_key: self.app._play_recent_entry(
-                    key
-                ),
+                callback=lambda _, key=entry.cache_key: self.app._play_recent_entry(key),
             )
             remove_item = rumps.MenuItem(
                 f"✕ {title}",
-                callback=lambda _, key=entry.cache_key: self.app._remove_recent_entry(
-                    key
-                ),
+                callback=lambda _, key=entry.cache_key: self.app._remove_recent_entry(key),
             )
             self.mark_option_alternate(remove_item)
             self.recent_menu[f"recent_play_{index}"] = play_item

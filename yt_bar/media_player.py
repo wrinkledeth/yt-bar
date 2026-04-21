@@ -5,7 +5,6 @@ import objc
 from .constants import MEDIA_PLAYER_FRAMEWORK_PATH
 from .utils import log_exception
 
-
 MP_REMOTE_COMMAND_STATUS_SUCCESS = 0
 MP_REMOTE_COMMAND_STATUS_NO_SUCH_CONTENT = 100
 MP_REMOTE_COMMAND_STATUS_COMMAND_FAILED = 200
@@ -48,14 +47,10 @@ def load_media_player_support():
             command_status_success=MP_REMOTE_COMMAND_STATUS_SUCCESS,
             command_status_command_failed=MP_REMOTE_COMMAND_STATUS_COMMAND_FAILED,
             command_status_no_such_content=MP_REMOTE_COMMAND_STATUS_NO_SUCH_CONTENT,
-            property_elapsed_playback_time=variables[
-                "MPNowPlayingInfoPropertyElapsedPlaybackTime"
-            ],
+            property_elapsed_playback_time=variables["MPNowPlayingInfoPropertyElapsedPlaybackTime"],
             property_playback_rate=variables["MPNowPlayingInfoPropertyPlaybackRate"],
             property_title=variables["MPMediaItemPropertyTitle"],
-            property_playback_duration=variables[
-                "MPMediaItemPropertyPlaybackDuration"
-            ],
+            property_playback_duration=variables["MPMediaItemPropertyPlaybackDuration"],
         )
     except Exception as exc:
         log_exception("MediaPlayer integration unavailable", exc)

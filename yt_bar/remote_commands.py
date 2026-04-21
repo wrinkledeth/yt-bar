@@ -127,15 +127,9 @@ class RemoteCommandController:
 
         try:
             self._support = support
-            self._remote_command_center = (
-                support.command_center_class.sharedCommandCenter()
-            )
-            self._now_playing_info_center = (
-                support.now_playing_info_center_class.defaultCenter()
-            )
-            self._remote_command_bridge = RemoteCommandBridge.alloc().initWithOwner_(
-                self
-            )
+            self._remote_command_center = support.command_center_class.sharedCommandCenter()
+            self._now_playing_info_center = support.now_playing_info_center_class.defaultCenter()
+            self._remote_command_bridge = RemoteCommandBridge.alloc().initWithOwner_(self)
             self._register_remote_commands()
         except Exception as exc:
             log_exception("Failed to initialize MediaPlayer integration", exc)

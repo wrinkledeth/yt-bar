@@ -9,6 +9,7 @@ import numpy as np
 
 from .constants import (
     CHANNELS,
+    DECODER_QUEUE_BUFFERS,
     GRID_H,
     GRID_W,
     INTERNAL_SAMPLE_RATE,
@@ -21,7 +22,6 @@ from .constants import (
     VISUALIZER_SNAPSHOT_FRAMES,
     VISUALIZER_TAP_BUFFER_FRAMES,
     WORKER_TICK_SECONDS,
-    DECODER_QUEUE_BUFFERS,
 )
 from .core_audio import install_default_output_listener, uninstall_default_output_listener
 from .models import PlaybackSession, PlayRequest
@@ -319,9 +319,7 @@ class AudioEngine:
             if current_session is None or session_id not in (None, current_session.id):
                 return current_session, False
             current_session.rebuild_pending = True
-            current_session.rebuild_deadline = (
-                time.monotonic() + ROUTE_CHANGE_DEBOUNCE_SECONDS
-            )
+            current_session.rebuild_deadline = time.monotonic() + ROUTE_CHANGE_DEBOUNCE_SECONDS
             print(
                 "Route change detected",
                 {"reason": reason, "session_id": current_session.id},
@@ -453,9 +451,7 @@ class AudioEngine:
         details = {
             "seek_id": session.seek_trace_id,
             "event": event,
-            "ms": round(
-                (time.perf_counter() - session.seek_trace_started_at) * 1000, 1
-            ),
+            "ms": round((time.perf_counter() - session.seek_trace_started_at) * 1000, 1),
             "target": round(session.seek_trace_target, 3),
             "paused": bool(session.paused),
             "generation": session.decoder_generation,
@@ -481,9 +477,11 @@ class AudioEngine:
     def _build_engine(self, session):
         engine = AVFoundation.AVAudioEngine.alloc().init()
         player = AVFoundation.AVAudioPlayerNode.alloc().init()
-        audio_format = AVFoundation.AVAudioFormat.alloc().initStandardFormatWithSampleRate_channels_(
-            float(INTERNAL_SAMPLE_RATE),
-            CHANNELS,
+        audio_format = (
+            AVFoundation.AVAudioFormat.alloc().initStandardFormatWithSampleRate_channels_(
+                float(INTERNAL_SAMPLE_RATE),
+                CHANNELS,
+            )
         )
 
         engine.attachNode_(player)
@@ -504,9 +502,7 @@ class AudioEngine:
 
     def _register_engine_observer(self, session):
         observer = EngineConfigurationObserver.alloc().initWithCallback_(
-            lambda sid=session.id: self._enqueue_command(
-                "route_event", "engine_config", sid
-            )
+            lambda sid=session.id: self._enqueue_command("route_event", "engine_config", sid)
         )
         self._notification_center.addObserver_selector_name_object_(
             observer,
@@ -626,11 +622,7 @@ class AudioEngine:
                 if usable <= 0:
                     continue
 
-                chunk = (
-                    np.frombuffer(data[:usable], dtype=np.float32)
-                    .reshape(-1, CHANNELS)
-                    .copy()
-                )
+                chunk = np.frombuffer(data[:usable], dtype=np.float32).reshape(-1, CHANNELS).copy()
                 if (
                     session.seek_trace_id != 0
                     and session.decoder_generation == generation
@@ -643,9 +635,7 @@ class AudioEngine:
                         chunk_frames=int(len(chunk)),
                     )
 
-                while (
-                    not session.stop_event.is_set() and not decoder_stop_event.is_set()
-                ):
+                while not session.stop_event.is_set() and not decoder_stop_event.is_set():
                     try:
                         decoded_queue.put(chunk, timeout=0.1)
                         break
@@ -666,9 +656,7 @@ class AudioEngine:
         except Exception as exc:
             if not session.stop_event.is_set() and not decoder_stop_event.is_set():
                 log_exception("Decoder error", exc)
-                self._enqueue_command(
-                    "decoder_failed", session.id, generation, str(exc)
-                )
+                self._enqueue_command("decoder_failed", session.id, generation, str(exc))
         finally:
             self._cleanup_process(ffmpeg_process)
             self._cleanup_process(ytdlp_process)
@@ -704,17 +692,12 @@ class AudioEngine:
             try:
                 session.player.play()
                 session.started_playback = True
-                if (
-                    session.seek_trace_id != 0
-                    and not session.seek_trace_player_play_logged
-                ):
+                if session.seek_trace_id != 0 and not session.seek_trace_player_play_logged:
                     session.seek_trace_player_play_logged = True
                     self._log_seek_trace(
                         session,
                         "player_play_called",
-                        scheduled_ahead_frames=int(
-                            self._scheduled_ahead_frames(session)
-                        ),
+                        scheduled_ahead_frames=int(self._scheduled_ahead_frames(session)),
                     )
                 self._publish_state(active=True, starting=False, paused=False)
             except Exception as exc:
@@ -799,10 +782,7 @@ class AudioEngine:
                     AVFoundation.AVAudioPlayerNodeCompletionDataPlayedBack,
                     completion_handler,
                 )
-                if (
-                    session.seek_trace_id != 0
-                    and not session.seek_trace_first_buffer_logged
-                ):
+                if session.seek_trace_id != 0 and not session.seek_trace_first_buffer_logged:
                     session.seek_trace_first_buffer_logged = True
                     scheduled_ahead_frames = int(self._scheduled_ahead_frames(session))
                     self._log_seek_trace(
@@ -835,9 +815,7 @@ class AudioEngine:
             self._publish_state(active=True, starting=False, paused=True)
             return
 
-        self._publish_state(
-            active=True, starting=not session.started_playback, paused=False
-        )
+        self._publish_state(active=True, starting=not session.started_playback, paused=False)
         if session.started_playback and self._scheduled_ahead_frames(session) > 0:
             try:
                 session.player.play()
@@ -904,9 +882,7 @@ class AudioEngine:
             return False
 
         tolerance = PCM_BUFFER_FRAMES // 2
-        return (
-            session.last_rendered_frames + tolerance >= session.scheduled_frames_total
-        )
+        return session.last_rendered_frames + tolerance >= session.scheduled_frames_total
 
     def _should_stop_for_error(self, session):
         if not session.decoder_failed:
@@ -917,9 +893,7 @@ class AudioEngine:
             return True
 
         tolerance = PCM_BUFFER_FRAMES // 2
-        return (
-            session.last_rendered_frames + tolerance >= session.scheduled_frames_total
-        )
+        return session.last_rendered_frames + tolerance >= session.scheduled_frames_total
 
     @staticmethod
     def _resume_request(

@@ -1,7 +1,6 @@
 import os
 import re
 
-
 INTERNAL_SAMPLE_RATE = 48000
 CHANNELS = 2
 PCM_BUFFER_FRAMES = 4096

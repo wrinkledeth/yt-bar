@@ -23,9 +23,7 @@ AUDIO_HARDWARE_PROPERTY_DEFAULT_OUTPUT_DEVICE = _fourcc("dOut")
 
 
 try:
-    _CORE_AUDIO = ctypes.CDLL(
-        "/System/Library/Frameworks/CoreAudio.framework/CoreAudio"
-    )
+    _CORE_AUDIO = ctypes.CDLL("/System/Library/Frameworks/CoreAudio.framework/CoreAudio")
     _AUDIO_OBJECT_GET_PROPERTY_DATA = _CORE_AUDIO.AudioObjectGetPropertyData
     _AUDIO_OBJECT_GET_PROPERTY_DATA.argtypes = [
         c_uint32,
@@ -54,9 +52,7 @@ try:
     ]
     _AUDIO_OBJECT_ADD_PROPERTY_LISTENER.restype = ctypes.c_int32
 
-    _AUDIO_OBJECT_REMOVE_PROPERTY_LISTENER = (
-        _CORE_AUDIO.AudioObjectRemovePropertyListener
-    )
+    _AUDIO_OBJECT_REMOVE_PROPERTY_LISTENER = _CORE_AUDIO.AudioObjectRemovePropertyListener
     _AUDIO_OBJECT_REMOVE_PROPERTY_LISTENER.argtypes = [
         c_uint32,
         ctypes.POINTER(AudioObjectPropertyAddress),

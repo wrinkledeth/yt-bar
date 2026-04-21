@@ -109,7 +109,5 @@ def schedule_common_mode_timer(interval, callback):
         None,
         True,
     )
-    Foundation.NSRunLoop.currentRunLoop().addTimer_forMode_(
-        timer, Foundation.NSRunLoopCommonModes
-    )
+    Foundation.NSRunLoop.currentRunLoop().addTimer_forMode_(timer, Foundation.NSRunLoopCommonModes)
     return timer, target

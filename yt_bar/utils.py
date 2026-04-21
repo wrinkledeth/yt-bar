@@ -41,9 +41,7 @@ def absolute_repo_path(path):
 
 
 def partial_cache_abspath_for_id(item_id):
-    return os.path.join(
-        SONGS_DIR, f"{sanitize_cache_key(item_id)}{PARTIAL_CACHE_SUFFIX}"
-    )
+    return os.path.join(SONGS_DIR, f"{sanitize_cache_key(item_id)}{PARTIAL_CACHE_SUFFIX}")
 
 
 def truncate_title(title, limit=RECENT_TITLE_LIMIT):

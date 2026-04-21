@@ -48,6 +48,25 @@ Remove the LaunchAgent later with:
 ./uninstall.sh
 ```
 
+## Development
+
+Run the standard checks:
+
+```bash
+uv run pytest -q
+uv run ruff check .
+uv run ruff format --check .
+.venv/bin/python -m compileall yt_bar.py yt_bar
+```
+
+While iterating, prefer focused checks for changed files, such as:
+
+```bash
+uv run pytest tests/test_smoke.py -q
+uv run ruff check yt_bar/app.py
+uv run ruff format --check yt_bar/app.py
+```
+
 ## Usage
 
 Core:

@@ -67,9 +67,7 @@ class YTBar(rumps.App):
             skip_interval=lambda: self._skip_interval,
         )
 
-        self._viz_timer, self._viz_timer_target = schedule_common_mode_timer(
-            0.07, self._update_viz
-        )
+        self._viz_timer, self._viz_timer_target = schedule_common_mode_timer(0.07, self._update_viz)
         self._progress_timer, self._progress_timer_target = schedule_common_mode_timer(
             1.0, self._update_progress
         )

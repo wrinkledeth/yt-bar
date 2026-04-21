@@ -192,9 +192,7 @@ class RecentItem:
     def from_dict(cls, data):
         return cls(
             kind=(data.get("kind") or "video").strip() or "video",
-            id=sanitize_cache_key(
-                str(data.get("id") or stable_hash(data.get("source_url", "")))
-            ),
+            id=sanitize_cache_key(str(data.get("id") or stable_hash(data.get("source_url", "")))),
             title=(data.get("title") or "Unknown").strip() or "Unknown",
             source_url=(data.get("source_url") or "").strip(),
             last_played=float(data.get("last_played") or 0.0),
