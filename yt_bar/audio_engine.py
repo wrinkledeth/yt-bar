@@ -1,5 +1,4 @@
 import queue
-import subprocess
 import threading
 import time
 
@@ -9,12 +8,10 @@ import numpy as np
 
 from .constants import (
     CHANNELS,
-    DECODER_QUEUE_BUFFERS,
     GRID_H,
     GRID_W,
     INTERNAL_SAMPLE_RATE,
     PCM_BUFFER_FRAMES,
-    PCM_BYTES_PER_FRAME,
     ROUTE_CHANGE_DEBOUNCE_SECONDS,
     ROUTE_RETRY_DELAYS,
     SCHEDULE_AHEAD_FRAMES,
@@ -24,6 +21,7 @@ from .constants import (
     WORKER_TICK_SECONDS,
 )
 from .core_audio import install_default_output_listener, uninstall_default_output_listener
+from .decoder import DecoderPipeline
 from .models import PlaybackSession, PlayRequest
 from .objc_bridges import EngineConfigurationObserver
 from .utils import log_exception
@@ -48,6 +46,7 @@ class AudioEngine:
         self._viz_snapshot = None
         self._output_listener = None
         self._seek_trace_counter = 0
+        self._decoder = DecoderPipeline(self._enqueue_command, self._log_seek_trace)
         self._pending_retry_request = None
         self._pending_retry_at = 0.0
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
@@ -544,142 +543,7 @@ class AudioEngine:
         session.graph.tap_block = tap_block
 
     def _start_decoder_thread(self, session):
-        session.decoder.generation += 1
-        generation = session.decoder.generation
-        decoder_stop_event = threading.Event()
-        session.decoder.stop_event = decoder_stop_event
-        session.decoder.queue = queue.Queue(maxsize=DECODER_QUEUE_BUFFERS)
-        session.decoder.thread = threading.Thread(
-            target=self._decoder_loop,
-            args=(session, generation, decoder_stop_event, session.decoder.queue),
-            daemon=True,
-        )
-        session.decoder.thread.start()
-
-    def _decoder_loop(self, session, generation, decoder_stop_event, decoded_queue):
-        ytdlp_process = None
-        ffmpeg_process = None
-
-        try:
-            if session.stop_event.is_set() or decoder_stop_event.is_set():
-                return
-
-            ffmpeg_cmd = ["ffmpeg"]
-            if session.base_offset_seconds > 0:
-                ffmpeg_cmd += ["-ss", str(session.base_offset_seconds)]
-            if session.is_local:
-                ffmpeg_cmd += [
-                    "-i",
-                    session.url,
-                    "-f",
-                    "f32le",
-                    "-acodec",
-                    "pcm_f32le",
-                    "-ac",
-                    str(CHANNELS),
-                    "-ar",
-                    str(INTERNAL_SAMPLE_RATE),
-                    "-loglevel",
-                    "error",
-                    "-",
-                ]
-                ffmpeg_process = subprocess.Popen(
-                    ffmpeg_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                )
-            else:
-                ytdlp_process = subprocess.Popen(
-                    [
-                        "yt-dlp",
-                        "-f",
-                        "bestaudio",
-                        "-o",
-                        "-",
-                        "--no-warnings",
-                        session.url,
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                )
-                ffmpeg_cmd += [
-                    "-i",
-                    "pipe:0",
-                    "-f",
-                    "f32le",
-                    "-acodec",
-                    "pcm_f32le",
-                    "-ac",
-                    str(CHANNELS),
-                    "-ar",
-                    str(INTERNAL_SAMPLE_RATE),
-                    "-loglevel",
-                    "error",
-                    "-",
-                ]
-                ffmpeg_process = subprocess.Popen(
-                    ffmpeg_cmd,
-                    stdin=ytdlp_process.stdout,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                )
-                if ytdlp_process.stdout is not None:
-                    ytdlp_process.stdout.close()
-
-            session.decoder.ytdlp_process = ytdlp_process
-            session.decoder.ffmpeg_process = ffmpeg_process
-
-            bytes_per_chunk = PCM_BUFFER_FRAMES * PCM_BYTES_PER_FRAME
-            while not session.stop_event.is_set() and not decoder_stop_event.is_set():
-                data = ffmpeg_process.stdout.read(bytes_per_chunk)
-                if not data:
-                    break
-
-                usable = len(data) - (len(data) % PCM_BYTES_PER_FRAME)
-                if usable <= 0:
-                    continue
-
-                chunk = np.frombuffer(data[:usable], dtype=np.float32).reshape(-1, CHANNELS).copy()
-                if (
-                    session.seek_trace.id != 0
-                    and session.decoder.generation == generation
-                    and not session.seek_trace.first_chunk_logged
-                ):
-                    session.seek_trace.first_chunk_logged = True
-                    self._log_seek_trace(
-                        session,
-                        "first_pcm_chunk",
-                        chunk_frames=int(len(chunk)),
-                    )
-
-                while not session.stop_event.is_set() and not decoder_stop_event.is_set():
-                    try:
-                        decoded_queue.put(chunk, timeout=0.1)
-                        break
-                    except queue.Full:
-                        continue
-
-            if session.stop_event.is_set() or decoder_stop_event.is_set():
-                return
-
-            ffmpeg_code = self._wait_process(ffmpeg_process)
-            ytdlp_code = self._wait_process(ytdlp_process)
-            if ffmpeg_code not in (0, None):
-                raise RuntimeError(f"ffmpeg exited with status {ffmpeg_code}")
-            if ytdlp_code not in (0, None):
-                raise RuntimeError(f"yt-dlp exited with status {ytdlp_code}")
-
-            self._enqueue_command("decoder_eof", session.id, generation)
-        except Exception as exc:
-            if not session.stop_event.is_set() and not decoder_stop_event.is_set():
-                log_exception("Decoder error", exc)
-                self._enqueue_command("decoder_failed", session.id, generation, str(exc))
-        finally:
-            self._cleanup_process(ffmpeg_process)
-            self._cleanup_process(ytdlp_process)
-            if session.decoder.generation == generation:
-                session.decoder.ffmpeg_process = None
-                session.decoder.ytdlp_process = None
+        self._decoder.start(session)
 
     def _service_session(self, session):
         self._refresh_elapsed(session)
@@ -978,28 +842,7 @@ class AudioEngine:
         )
 
     def _stop_decoder(self, session, fast=False):
-        if session.decoder.stop_event is not None:
-            session.decoder.stop_event.set()
-
-        cleanup_timeout = 0.1 if fast else 2.0
-        self._cleanup_process(
-            session.decoder.ffmpeg_process,
-            timeout=cleanup_timeout,
-            force_kill=fast,
-        )
-        self._cleanup_process(
-            session.decoder.ytdlp_process,
-            timeout=cleanup_timeout,
-            force_kill=fast,
-        )
-
-        if session.decoder.thread is not None and session.decoder.thread.is_alive():
-            session.decoder.thread.join(timeout=0.25 if fast else 1.0)
-
-        session.decoder.thread = None
-        session.decoder.stop_event = None
-        session.decoder.ffmpeg_process = None
-        session.decoder.ytdlp_process = None
+        self._decoder.stop(session, fast=fast)
 
     def _discard_session(
         self,
@@ -1145,28 +988,3 @@ class AudioEngine:
     def _remove_default_output_listener(self):
         uninstall_default_output_listener(self._output_listener)
         self._output_listener = None
-
-    @staticmethod
-    def _wait_process(proc):
-        if proc is None:
-            return None
-        try:
-            return proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            return proc.poll()
-
-    @staticmethod
-    def _cleanup_process(proc, timeout=2.0, force_kill=False):
-        if proc and proc.poll() is None:
-            try:
-                if force_kill:
-                    proc.kill()
-                else:
-                    proc.terminate()
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                try:
-                    proc.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    pass

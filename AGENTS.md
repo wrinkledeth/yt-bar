@@ -7,7 +7,8 @@
 ## Project Structure & Entry Points
 - `yt_bar.py` is the LaunchAgent-compatible entry shim; keep it present because `install.sh` points at it.
 - `yt_bar/app.py` contains `YTBar(rumps.App)` and `main()`.
-- `yt_bar/audio_engine.py` contains the playback engine and decoder pipeline.
+- `yt_bar/audio_engine.py` contains the playback engine facade and AVFoundation scheduling flow.
+- `yt_bar/decoder.py` contains the `yt-dlp` / `ffmpeg` decoder subprocess pipeline.
 - `yt_bar/playback.py` owns current track, playlist advancement, playback mode/generation, and cache-trigger coordination state.
 - `yt_bar/recent.py` owns recent-index state, menu-ready recent entries, stale pruning, and recent-to-playable-item conversion.
 - `yt_bar/menu.py`, `yt_bar/cache.py`, `yt_bar/remote_commands.py`, `yt_bar/storage.py`, and `yt_bar/resolver.py` own the corresponding app subsystems.
@@ -58,12 +59,16 @@
 
 ## Architecture Notes
 - `AudioEngine` (`yt_bar/audio_engine.py`) owns:
-  - the `yt-dlp/ffmpeg or local-file/ffmpeg -> AVAudioEngine` pipeline
+  - the public playback facade for `yt-dlp/ffmpeg or local-file/ffmpeg -> AVAudioEngine`
   - playback state
   - a single serial playback worker
   - elapsed time tracking from `AVAudioPlayerNode` timing
   - CoreAudio default-output and `AVAudioEngineConfigurationChangeNotification` handling
   - stereometer dot-grid computation from a mixer tap snapshot
+- `DecoderPipeline` (`yt_bar/decoder.py`) owns:
+  - decoder thread startup/shutdown
+  - `yt-dlp` / `ffmpeg` subprocess construction and cleanup
+  - decoded PCM chunk queueing for `AudioEngine`
 - `YTBar` (`yt_bar/app.py`) owns:
   - the `rumps` menu bar app
   - clipboard URL intake
