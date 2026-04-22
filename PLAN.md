@@ -2,8 +2,8 @@
 
 ## Current Focus
 
-Phase 1 and Phase 2 are complete. Phase 3 is the next active phase; later phases remain
-backlog context.
+Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is the next active phase;
+later phases remain backlog context.
 
 ## Phase 1: Cleanup - Done
 
@@ -93,7 +93,46 @@ backlog context.
 - Add focused pure/module tests for resolver behavior, storage load/save and stale pruning, cache scheduling/download paths, and utils/visualizer formatting.
 - Keep audio-engine behavioral tests minimal until after extraction; test pure predicates/helpers only if they become easy during cleanup.
 
-## Phase 3: Typed Interfaces And Session State
+## Phase 3: Typed Interfaces And Session State - Done
+
+- Commit: `ca13d3e`
+- Completed:
+  - Added a typed `UICommand` / `UICommandKind` model for pending UI actions.
+  - Updated remote command dispatch, UI action enqueueing, and UI action handling to use typed commands.
+  - Split `PlaybackSession` runtime state into graph, decoder, schedule, route, and seek-trace dataclasses.
+  - Preserved the existing public `AudioEngine` methods and `PlaybackSession` request proxy properties.
+  - Added focused model tests for typed command factories and per-session runtime state isolation.
+- Validation passed:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check .`
+  - `.venv/bin/python -m compileall yt_bar.py yt_bar`
+  - Restarted the installed LaunchAgent and verified `launchctl print` reported `state = running`.
+- Manual playback/menu/media-key checks were skipped beyond launch verification.
+
+## Phase 3 Decisions And Deviations
+
+- The typed pending-action model lives in `yt_bar.models` with the other shared dataclasses.
+- Remote command callbacks enqueue generic UI commands such as play, pause, toggle, and seek-delta; there are no longer separate `remote_*` action strings.
+- The existing pending-action queue and `_state_lock` handoff remain the UI-thread boundary.
+- `PlaybackSession` still exposes request-backed proxy properties such as `url`, `duration`, `paused`, and `base_offset_seconds` so the `AudioEngine` refactor stayed mechanical.
+- Audio-engine behavioral tests remained out of scope; Phase 3 added model-focused coverage only.
+
+## Phase 3 Discoveries For Future Phases
+
+- The new `PlaybackSession` groups map cleanly to likely Phase 4 extraction boundaries:
+  graph state for AVFoundation session ownership, decoder state for subprocess/queue ownership, and schedule/route/seek-trace state for playback coordination helpers.
+- Future dataclasses should avoid field names that shadow imported modules during annotation evaluation; `PlaybackDecoderState.queue` required an import alias for the `queue` module.
+- Launch log files do not include timestamps on each line, so launch verification should check file modification times before treating old stderr/stdout lines as current failures.
+- `UICommand` can be reused or moved if Phase 4 introduces explicit menu action snapshots.
+
+## Phase 3 Out-Of-Scope Follow-Ups
+
+- Manually test clipboard playback, pause/resume, seek, recents, compact menu, media keys, and title states after the next UI-touching change.
+- Add audio-engine behavioral tests for local seek, route rebuild, and decoder failure paths once the decoder/AVFoundation extraction makes those seams easier to isolate.
+- Consider moving `UICommand` into a dedicated action or controller module if Phase 4 expands the command surface beyond the current pending UI queue.
+
+## Phase 3 Original Criteria
 
 - Replace pending UI action strings with a typed command model.
 - Update remote command dispatch, UI action enqueueing, and UI action handling to use that model.
