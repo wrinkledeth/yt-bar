@@ -2,9 +2,9 @@
 
 ## Current Focus
 
-Phase 1, Phase 2, Phase 3, Phase 4 Step 1, Phase 4 Step 2, and Phase 4
-Step 3 are complete. The remaining structural refactor is the AudioEngine split;
-later phases remain backlog context.
+Phase 1, Phase 2, Phase 3, Phase 4 Step 1, Phase 4 Step 2, Phase 4
+Step 3, and Phase 4 Step 4 are complete. The remaining structural refactor
+work is the rest of the AudioEngine split; later phases remain backlog context.
 
 ## Phase 1: Cleanup - Done
 
@@ -260,9 +260,51 @@ later phases remain backlog context.
 - Manually test clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance before closing the broader playback/UI refactor.
 - Split `AudioEngine` into decoder, AVFoundation session, and stereometer-focused modules while keeping `AudioEngine` as the public facade.
 
+## Phase 4 Step 4: Audio Decoder Pipeline Extraction - Done
+
+- Commit: `4c284f0`
+- Completed:
+  - Added `DecoderPipeline` in `yt_bar/decoder.py` to own decoder thread lifecycle, `yt-dlp` / `ffmpeg` subprocess construction, PCM chunk queueing, and decoder process cleanup.
+  - Moved decoder command construction into focused `build_ytdlp_command` and `build_ffmpeg_command` helpers.
+  - Updated `AudioEngine` to keep the public playback facade, AVFoundation graph/scheduling, route rebuild handling, local seek orchestration, and visualizer handling while delegating decoder start/stop.
+  - Added focused decoder command-builder tests.
+  - Updated `AGENTS.md` for the new `yt_bar/decoder.py` ownership layout.
+- Validation passed:
+  - `uv run pytest tests/test_decoder.py -q`
+  - `uv run ruff check yt_bar/decoder.py yt_bar/audio_engine.py tests/test_decoder.py`
+  - `uv run ruff format --check yt_bar/decoder.py yt_bar/audio_engine.py tests/test_decoder.py`
+  - `uv run pytest -q`
+  - `uv run ruff check .`
+  - `uv run ruff format --check .`
+  - `.venv/bin/python -m compileall yt_bar.py yt_bar`
+  - Restarted the installed LaunchAgent and verified `launchctl print` reported `state = running`; process-list verification showed `.venv/bin/python yt_bar.py`.
+- Manual clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance checks were skipped beyond launch/process verification.
+
+## Phase 4 Step 4 Decisions And Deviations
+
+- The decoder extraction stopped at the subprocess/PCM queue boundary; buffer scheduling, elapsed tracking, route rebuild handling, local seek orchestration, and visualizer tap handling remain in `AudioEngine`.
+- `DecoderPipeline` receives callbacks for worker-command enqueueing and seek-trace logging instead of importing or owning the `AudioEngine` facade.
+- Decoder command builders are module-level helpers so command behavior can be tested without spawning external binaries.
+- `PlaybackDecoderState` remains in `yt_bar.models` for now because the active session object is still shared by the facade and decoder pipeline.
+- No visible playback or menu behavior changes were intended.
+
+## Phase 4 Step 4 Discoveries For Future Phases
+
+- `AudioEngine` still owns a large AVFoundation graph/scheduling surface; the next split should likely extract graph/session ownership before moving stereometer logic.
+- Seek-trace state now crosses the decoder boundary through a callback; future extraction should preserve trace events without letting decoder code mutate public playback state directly.
+- Decoder command construction is now covered by pure tests, but EOF, subprocess failure, PCM queueing, and fast-stop cleanup still need fakes around `subprocess.Popen` to test without external binaries.
+- `yt_bar.models` still imports `subprocess` for decoder process annotations; if future pure model imports matter, process handles should move behind decoder-owned state or become opaque objects.
+
+## Phase 4 Step 4 Out-Of-Scope Follow-Ups
+
+- Extract AVFoundation graph/session ownership from `AudioEngine`.
+- Extract stereometer/visualizer tap snapshot state from `AudioEngine`.
+- Add decoder pipeline tests with fake `Popen`/stdout coverage for EOF, error reporting, PCM queueing, and stop/fast-cleanup behavior.
+- Manually test clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance before closing the broader playback/UI refactor.
+
 ## Phase 4 Remaining Structural Refactors
 
-- Split `AudioEngine` last into decoder, AVFoundation session, and stereometer-focused modules while keeping `AudioEngine` as the public facade.
+- Continue the `AudioEngine` split by extracting AVFoundation session and stereometer-focused modules while keeping `AudioEngine` as the public facade.
 
 ## Validation
 
