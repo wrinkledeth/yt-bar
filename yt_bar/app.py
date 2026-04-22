@@ -1,6 +1,5 @@
 import signal
 import threading
-import time
 from collections import deque
 
 import AppKit
@@ -13,17 +12,16 @@ from .menu import MenuController
 from .models import (
     MenuAction,
     MenuActionKind,
-    MenuRecentEntry,
     MenuSnapshot,
-    RecentItem,
     ResolvedItem,
     UICommand,
     UICommandKind,
 )
 from .objc_bridges import schedule_common_mode_timer
+from .recent import RecentController
 from .remote_commands import RemoteCommandController
 from .resolver import resolve_url
-from .storage import RecentStore, Settings, SettingsStore
+from .storage import Settings, SettingsStore
 from .visualizer import grid_to_braille
 
 
@@ -46,22 +44,19 @@ class YTBar(rumps.App):
         self._progress_duration = None
         self._current_item_generation = 0
         self._pending_actions = deque()
-        self._recent_dirty = False
-        self._recent_entries: dict[str, RecentItem] = {}
-        self._item_last_played: dict[str, float] = {}
         self._cleanup_done = False
 
         self.settings_store = SettingsStore()
-        self.recent_store = RecentStore()
+        self.recent = RecentController()
         self.cache = CacheManager(
             is_current_stream_item_active=self._is_cache_item_still_current,
-            refresh_recent_for_cache=self._refresh_recent_for_cache,
+            refresh_recent_for_cache=self.recent.refresh_for_cache,
         )
         self.cache.ensure_cache_dir()
         self.cache.cleanup_partial_cache_files()
         self._load_settings()
-        self._load_recent_index()
-        self._sweep_stale_recent_entries()
+        self.recent.load()
+        self.recent.sweep_stale_entries()
         rumps.events.before_quit.register(self._cleanup_before_quit)
 
         self.menu_controller = MenuController(
@@ -113,10 +108,6 @@ class YTBar(rumps.App):
 
     def _menu_snapshot(self):
         current_index, track = self._current_track_snapshot()
-        recent_entries = tuple(
-            MenuRecentEntry(cache_key=entry.cache_key, title=entry.title)
-            for entry in self._recent_entries_for_menu()
-        )
         return MenuSnapshot(
             now_playing_title=self._now_playing_title,
             playback_mode=self._now_playing_playback_mode,
@@ -128,7 +119,7 @@ class YTBar(rumps.App):
             compact_menu=self._compact_menu,
             skip_interval=self._skip_interval,
             recent_limit=self._recent_limit,
-            recent_entries=recent_entries,
+            recent_entries=self.recent.menu_entries(self._recent_limit),
         )
 
     def _render_menu(self):
@@ -149,36 +140,6 @@ class YTBar(rumps.App):
             )
         )
 
-    def _load_recent_index(self):
-        with self._state_lock:
-            self._recent_entries = self.recent_store.load()
-
-    def _save_recent_index_locked(self):
-        self.recent_store.save(self._recent_entries)
-
-    def _mark_recent_dirty_locked(self):
-        self._recent_dirty = True
-
-    def _sweep_stale_recent_entries_locked(self):
-        changed = self.recent_store.sweep_stale_entries(self._recent_entries)
-        if changed:
-            self._save_recent_index_locked()
-            self._mark_recent_dirty_locked()
-        return changed
-
-    def _sweep_stale_recent_entries(self):
-        with self._state_lock:
-            return self._sweep_stale_recent_entries_locked()
-
-    def _recent_entries_for_menu(self):
-        with self._state_lock:
-            entries = sorted(
-                self._recent_entries.values(),
-                key=lambda entry: entry.last_played,
-                reverse=True,
-            )
-        return entries[: self._recent_limit]
-
     def _on_compact_menu_toggled(self, _=None):
         self._compact_menu = not self._compact_menu
         self._save_settings()
@@ -196,17 +157,11 @@ class YTBar(rumps.App):
         self._render_menu()
 
     def _on_recent_menu_will_open(self):
-        self._sweep_stale_recent_entries()
+        self.recent.sweep_stale_entries()
         self._render_menu()
 
     def _remove_recent_entry(self, cache_key):
-        changed = False
-        with self._state_lock:
-            if cache_key in self._recent_entries:
-                del self._recent_entries[cache_key]
-                self._save_recent_index_locked()
-                changed = True
-        if changed:
+        if self.recent.remove(cache_key):
             self._render_menu()
 
     def _set_progress_display(self, elapsed=None, duration=None):
@@ -365,12 +320,11 @@ class YTBar(rumps.App):
             if self._pending_actions:
                 pending_actions = list(self._pending_actions)
                 self._pending_actions.clear()
-            if self._recent_dirty:
-                self._recent_dirty = False
 
         for command in pending_actions:
             self._perform_ui_action(command)
 
+        self.recent.consume_dirty()
         self._render_menu()
 
         if self.engine.is_playing:
@@ -432,66 +386,8 @@ class YTBar(rumps.App):
         pb = AppKit.NSPasteboard.generalPasteboard()
         return pb.stringForType_(AppKit.NSStringPboardType) or ""
 
-    def _latest_last_played_locked(self, item_key):
-        return self._item_last_played.get(item_key, time.time())
-
-    def _refresh_recent_from_item_locked(
-        self,
-        item,
-        *,
-        last_played=None,
-        remove_if_empty=False,
-    ):
-        cached_tracks = item.cached_tracks()
-        item_key = item.cache_key
-        existing = self._recent_entries.get(item_key)
-        effective_last_played = (
-            last_played
-            if last_played is not None
-            else (
-                existing.last_played
-                if existing is not None
-                else self._latest_last_played_locked(item_key)
-            )
-        )
-
-        if item.kind == "video" and cached_tracks:
-            cached_tracks = [cached_tracks[0]]
-
-        if not cached_tracks:
-            if remove_if_empty and existing is not None:
-                del self._recent_entries[item_key]
-                self._save_recent_index_locked()
-                self._mark_recent_dirty_locked()
-                return True
-            return False
-
-        updated = RecentItem(
-            kind=item.kind,
-            id=item.id,
-            title=item.title,
-            source_url=item.source_url,
-            last_played=effective_last_played,
-            tracks=cached_tracks,
-        )
-
-        if existing is not None and existing.to_dict() == updated.to_dict():
-            return False
-
-        self._recent_entries[item_key] = updated
-        self._save_recent_index_locked()
-        self._mark_recent_dirty_locked()
-        return True
-
     def _record_item_played(self, item, *, last_played=None):
-        timestamp = time.time() if last_played is None else last_played
-        with self._state_lock:
-            self._item_last_played[item.cache_key] = timestamp
-            self._refresh_recent_from_item_locked(
-                item,
-                last_played=timestamp,
-                remove_if_empty=False,
-            )
+        self.recent.record_item_played(item, last_played=last_played)
 
     def _is_cache_item_still_current(self, item, generation):
         with self._state_lock:
@@ -503,16 +399,7 @@ class YTBar(rumps.App):
             )
         return is_current_item and (self.engine.is_active or self.engine.is_paused)
 
-    def _refresh_recent_for_cache(self, item):
-        with self._state_lock:
-            self._refresh_recent_from_item_locked(
-                item,
-                last_played=self._latest_last_played_locked(item.cache_key),
-                remove_if_empty=False,
-            )
-
     def _start_item_playback(self, item, *, playback_mode):
-        last_played = time.time()
         self.engine.stop()
 
         with self._state_lock:
@@ -525,40 +412,14 @@ class YTBar(rumps.App):
             generation = self._current_item_generation
             self._pending_actions.append(UICommand.play())
 
-        self._record_item_played(item, last_played=last_played)
+        self._record_item_played(item)
         if playback_mode == "stream":
             self.cache.schedule_delayed_cache(item, generation)
         else:
             self.cache.cancel_delay()
 
-    def _recent_entry_to_item_locked(self, entry):
-        valid_tracks = [track for track in entry.tracks if track.is_cached()]
-        if not valid_tracks:
-            del self._recent_entries[entry.cache_key]
-            self._save_recent_index_locked()
-            self._mark_recent_dirty_locked()
-            return None
-
-        if len(valid_tracks) != len(entry.tracks):
-            entry.tracks = valid_tracks
-            self._save_recent_index_locked()
-            self._mark_recent_dirty_locked()
-
-        return ResolvedItem(
-            kind=entry.kind,
-            id=entry.id,
-            title=entry.title,
-            source_url=entry.source_url,
-            tracks=list(valid_tracks),
-        )
-
     def _play_recent_entry(self, item_key):
-        with self._state_lock:
-            entry = self._recent_entries.get(item_key)
-            if entry is None:
-                return
-            item = self._recent_entry_to_item_locked(entry)
-
+        item = self.recent.item_for_recent(item_key)
         if item is None:
             return
 
