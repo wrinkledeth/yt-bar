@@ -251,114 +251,132 @@ class AudioEngine:
                 current_session = self._service_session(current_session)
 
     def _handle_command(self, current_session, command):
-        name = command[0]
+        name, *payload = command
+        handler = {
+            "play": self._handle_play_command,
+            "stop": self._handle_stop_command,
+            "set_paused": self._handle_set_paused_command,
+            "seek_current": self._handle_seek_current_command,
+            "route_event": self._handle_route_event_command,
+            "decoder_eof": self._handle_decoder_eof_command,
+            "decoder_failed": self._handle_decoder_failed_command,
+            "buffer_complete": self._handle_buffer_complete_command,
+            "shutdown": self._handle_shutdown_command,
+        }.get(name)
 
-        if name == "play":
-            request = command[1]
-            self._pending_retry_request = None
-            if current_session is not None:
-                self._discard_session(current_session, reason="replaced")
+        if handler is None:
+            return current_session, False
+        return handler(current_session, *payload)
+
+    def _handle_play_command(self, current_session, request):
+        self._pending_retry_request = None
+        if current_session is not None:
+            self._discard_session(current_session, reason="replaced")
+        return self._attempt_start_request(request), False
+
+    def _handle_stop_command(self, current_session, reason):
+        self._pending_retry_request = None
+        if current_session is not None:
+            self._discard_session(current_session, reason=reason)
+        self._publish_stopped()
+        return None, False
+
+    def _handle_set_paused_command(self, current_session, target):
+        if current_session is not None:
+            self._set_paused(current_session, target)
+        return current_session, False
+
+    def _handle_seek_current_command(self, current_session, target):
+        if current_session is None or not current_session.is_local:
+            return current_session, False
+
+        self._begin_seek_trace(current_session, target)
+        request = self._resume_request(current_session, start_time=target)
+        if current_session.rebuild_pending:
+            self._log_seek_trace(
+                current_session,
+                "fallback_full_restart",
+                reason="rebuild_pending",
+            )
+            self._discard_session(
+                current_session,
+                reason="seek_during_rebuild",
+                clear_public_state=False,
+                notify_stopped=False,
+            )
             return self._attempt_start_request(request), False
 
-        if name == "stop":
-            self._pending_retry_request = None
-            if current_session is not None:
-                self._discard_session(current_session, reason=command[1])
-            self._publish_stopped()
-            return None, False
-
-        if name == "set_paused":
-            target = command[1]
-            if current_session is not None:
-                self._set_paused(current_session, target)
+        try:
+            self._restart_local_decoder(current_session, target)
             return current_session, False
-
-        if name == "seek_current":
-            target = command[1]
-            if current_session is None or not current_session.is_local:
-                return current_session, False
-
-            self._begin_seek_trace(current_session, target)
-            request = self._resume_request(current_session, start_time=target)
-            if current_session.rebuild_pending:
-                self._log_seek_trace(
-                    current_session,
-                    "fallback_full_restart",
-                    reason="rebuild_pending",
-                )
-                self._discard_session(
-                    current_session,
-                    reason="seek_during_rebuild",
-                    clear_public_state=False,
-                    notify_stopped=False,
-                )
-                return self._attempt_start_request(request), False
-
-            try:
-                self._restart_local_decoder(current_session, target)
-                return current_session, False
-            except Exception as exc:
-                self._log_seek_trace(
-                    current_session,
-                    "fallback_full_restart",
-                    reason="fast_seek_failed",
-                    error=str(exc),
-                )
-                log_exception("Fast local seek failed", exc)
-                self._discard_session(
-                    current_session,
-                    reason="fast_seek_fallback",
-                    clear_public_state=False,
-                    notify_stopped=False,
-                )
-                return self._attempt_start_request(request), False
-
-        if name == "route_event":
-            reason = command[1]
-            session_id = command[2]
-            if current_session is None or session_id not in (None, current_session.id):
-                return current_session, False
-            current_session.rebuild_pending = True
-            current_session.rebuild_deadline = time.monotonic() + ROUTE_CHANGE_DEBOUNCE_SECONDS
-            print(
-                "Route change detected",
-                {"reason": reason, "session_id": current_session.id},
+        except Exception as exc:
+            self._log_seek_trace(
+                current_session,
+                "fallback_full_restart",
+                reason="fast_seek_failed",
+                error=str(exc),
             )
+            log_exception("Fast local seek failed", exc)
+            self._discard_session(
+                current_session,
+                reason="fast_seek_fallback",
+                clear_public_state=False,
+                notify_stopped=False,
+            )
+            return self._attempt_start_request(request), False
+
+    def _handle_route_event_command(self, current_session, reason, session_id):
+        if current_session is None or session_id not in (None, current_session.id):
             return current_session, False
 
-        if name == "decoder_eof":
-            session_id, generation = command[1], command[2]
-            if (
-                current_session is not None
-                and current_session.id == session_id
-                and current_session.decoder_generation == generation
-            ):
-                current_session.decoder_eof = True
-            return current_session, False
-
-        if name == "decoder_failed":
-            session_id, generation, error_text = command[1], command[2], command[3]
-            if (
-                current_session is not None
-                and current_session.id == session_id
-                and current_session.decoder_generation == generation
-            ):
-                current_session.decoder_failed = True
-                current_session.decoder_error = error_text
-            return current_session, False
-
-        if name == "buffer_complete":
-            session_id, buffer_id, _callback_type = command[1], command[2], command[3]
-            if current_session is not None and current_session.id == session_id:
-                current_session.scheduled_buffers.pop(buffer_id, None)
-                current_session.completion_count += 1
-            return current_session, False
-
-        if name == "shutdown":
-            self._pending_retry_request = None
-            return current_session, True
-
+        current_session.rebuild_pending = True
+        current_session.rebuild_deadline = time.monotonic() + ROUTE_CHANGE_DEBOUNCE_SECONDS
+        print(
+            "Route change detected",
+            {"reason": reason, "session_id": current_session.id},
+        )
         return current_session, False
+
+    def _handle_decoder_eof_command(self, current_session, session_id, generation):
+        if self._is_current_decoder_generation(current_session, session_id, generation):
+            current_session.decoder_eof = True
+        return current_session, False
+
+    def _handle_decoder_failed_command(
+        self,
+        current_session,
+        session_id,
+        generation,
+        error_text,
+    ):
+        if self._is_current_decoder_generation(current_session, session_id, generation):
+            current_session.decoder_failed = True
+            current_session.decoder_error = error_text
+        return current_session, False
+
+    def _handle_buffer_complete_command(
+        self,
+        current_session,
+        session_id,
+        buffer_id,
+        _callback_type,
+    ):
+        if current_session is not None and current_session.id == session_id:
+            current_session.scheduled_buffers.pop(buffer_id, None)
+            current_session.completion_count += 1
+        return current_session, False
+
+    def _handle_shutdown_command(self, current_session):
+        self._pending_retry_request = None
+        return current_session, True
+
+    @staticmethod
+    def _is_current_decoder_generation(session, session_id, generation):
+        return (
+            session is not None
+            and session.id == session_id
+            and session.decoder_generation == generation
+        )
 
     def _attempt_start_request(self, request):
         try:
