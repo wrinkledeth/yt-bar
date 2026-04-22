@@ -58,7 +58,6 @@ class PlaybackSession:
     last_elapsed_seconds: float = 0.0
     rebuild_pending: bool = False
     rebuild_deadline: float = 0.0
-    completion_count: int = 0
     seek_trace_id: int = 0
     seek_trace_started_at: float = 0.0
     seek_trace_target: float = 0.0

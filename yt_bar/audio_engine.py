@@ -363,7 +363,6 @@ class AudioEngine:
     ):
         if current_session is not None and current_session.id == session_id:
             current_session.scheduled_buffers.pop(buffer_id, None)
-            current_session.completion_count += 1
         return current_session, False
 
     def _handle_shutdown_command(self, current_session):
