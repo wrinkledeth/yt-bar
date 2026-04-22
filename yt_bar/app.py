@@ -10,7 +10,16 @@ from .audio_engine import AudioEngine
 from .cache import CacheManager
 from .constants import PAUSE_TITLE
 from .menu import MenuController
-from .models import RecentItem, ResolvedItem, UICommand, UICommandKind
+from .models import (
+    MenuAction,
+    MenuActionKind,
+    MenuRecentEntry,
+    MenuSnapshot,
+    RecentItem,
+    ResolvedItem,
+    UICommand,
+    UICommandKind,
+)
 from .objc_bridges import schedule_common_mode_timer
 from .remote_commands import RemoteCommandController
 from .resolver import resolve_url
@@ -31,6 +40,10 @@ class YTBar(rumps.App):
         self._current_index = -1
         self._current_item: ResolvedItem | None = None
         self._current_playback_mode = "stream"
+        self._now_playing_title = "Not Playing"
+        self._now_playing_playback_mode = None
+        self._progress_elapsed = None
+        self._progress_duration = None
         self._current_item_generation = 0
         self._pending_actions = deque()
         self._recent_dirty = False
@@ -51,12 +64,11 @@ class YTBar(rumps.App):
         self._sweep_stale_recent_entries()
         rumps.events.before_quit.register(self._cleanup_before_quit)
 
-        self.menu_controller = MenuController(self)
-        self.menu_controller.apply_settings_check_marks()
-        self.menu_controller.apply_layout()
-        self.menu_controller.rebuild_recent_menu()
-        self.menu_controller.install_recent_menu_delegate()
-        self.menu_controller.refresh_playback_items()
+        self.menu_controller = MenuController(
+            dispatch_action=self._handle_menu_action,
+            apply_layout=self._apply_menu_layout,
+        )
+        self._render_menu()
 
         self.cache.start_workers()
         self.remote = RemoteCommandController(
@@ -94,6 +106,33 @@ class YTBar(rumps.App):
     def _enqueue_ui_action(self, command):
         with self._state_lock:
             self._pending_actions.append(command)
+
+    def _apply_menu_layout(self, layout):
+        self.menu.clear()
+        self.menu = layout
+
+    def _menu_snapshot(self):
+        current_index, track = self._current_track_snapshot()
+        recent_entries = tuple(
+            MenuRecentEntry(cache_key=entry.cache_key, title=entry.title)
+            for entry in self._recent_entries_for_menu()
+        )
+        return MenuSnapshot(
+            now_playing_title=self._now_playing_title,
+            playback_mode=self._now_playing_playback_mode,
+            progress_elapsed=self._progress_elapsed,
+            progress_duration=self._progress_duration,
+            active=self.engine.is_active,
+            paused=self.engine.is_paused,
+            has_current_track=track is not None and current_index >= 0,
+            compact_menu=self._compact_menu,
+            skip_interval=self._skip_interval,
+            recent_limit=self._recent_limit,
+            recent_entries=recent_entries,
+        )
+
+    def _render_menu(self):
+        self.menu_controller.render(self._menu_snapshot())
 
     def _load_settings(self):
         settings = self.settings_store.load()
@@ -140,29 +179,25 @@ class YTBar(rumps.App):
             )
         return entries[: self._recent_limit]
 
-    def _on_compact_menu_toggled(self, _):
+    def _on_compact_menu_toggled(self, _=None):
         self._compact_menu = not self._compact_menu
         self._save_settings()
-        self.menu_controller.apply_settings_check_marks()
-        self.menu_controller.apply_layout()
-        self.menu_controller.install_recent_menu_delegate()
-        self.menu_controller.refresh_playback_items()
+        self._render_menu()
 
     def _on_skip_changed(self, seconds):
         self._skip_interval = float(seconds)
         self._save_settings()
-        self.menu_controller.apply_settings_check_marks()
+        self._render_menu()
         self._update_remote_skip_intervals()
 
     def _on_recent_limit_changed(self, value):
         self._recent_limit = int(value)
         self._save_settings()
-        self.menu_controller.apply_settings_check_marks()
-        self.menu_controller.rebuild_recent_menu()
+        self._render_menu()
 
     def _on_recent_menu_will_open(self):
         self._sweep_stale_recent_entries()
-        self.menu_controller.rebuild_recent_menu()
+        self._render_menu()
 
     def _remove_recent_entry(self, cache_key):
         changed = False
@@ -172,10 +207,21 @@ class YTBar(rumps.App):
                 self._save_recent_index_locked()
                 changed = True
         if changed:
-            self.menu_controller.rebuild_recent_menu()
+            self._render_menu()
 
     def _set_progress_display(self, elapsed=None, duration=None):
-        self.menu_controller.set_progress_display(elapsed=elapsed, duration=duration)
+        if elapsed is None:
+            if not self.engine.is_active:
+                self._progress_elapsed = None
+                self._progress_duration = None
+                self._render_menu()
+                return
+            elapsed = self.engine.elapsed
+        if duration is None:
+            duration = self.engine.duration
+        self._progress_elapsed = elapsed
+        self._progress_duration = duration
+        self._render_menu()
 
     def _seek_to_pct(self, pct):
         if self.engine.duration <= 0:
@@ -262,9 +308,31 @@ class YTBar(rumps.App):
     def _handle_stopped_ui(self):
         if self.engine.is_active:
             return
-        self.menu_controller.set_not_playing()
+        self._now_playing_title = "Not Playing"
+        self._now_playing_playback_mode = None
         self._set_progress_display()
         self._clear_now_playing_info()
+
+    def _handle_menu_action(self, action: MenuAction):
+        if action.kind is MenuActionKind.PLAY_FROM_CLIPBOARD:
+            self.on_paste_url(None)
+        elif action.kind is MenuActionKind.PLAY_PAUSE:
+            self.on_playpause(None)
+        elif action.kind is MenuActionKind.SEEK_PERCENT and action.percent is not None:
+            self._seek_to_pct(action.percent)
+        elif action.kind is MenuActionKind.PLAY_RECENT and action.cache_key is not None:
+            self._play_recent_entry(action.cache_key)
+        elif action.kind is MenuActionKind.REMOVE_RECENT and action.cache_key is not None:
+            self._remove_recent_entry(action.cache_key)
+        elif action.kind is MenuActionKind.TOGGLE_COMPACT_MENU:
+            self._on_compact_menu_toggled()
+        elif action.kind is MenuActionKind.SET_SKIP_INTERVAL and action.seconds is not None:
+            self._on_skip_changed(action.seconds)
+        elif action.kind is MenuActionKind.SET_RECENT_LIMIT and action.recent_limit is not None:
+            self._on_recent_limit_changed(action.recent_limit)
+        elif action.kind is MenuActionKind.RECENT_MENU_WILL_OPEN:
+            self._on_recent_menu_will_open()
+        self._render_menu()
 
     def _perform_ui_action(self, command):
         if command.kind is UICommandKind.PLAY:
@@ -293,22 +361,17 @@ class YTBar(rumps.App):
 
     def _update_viz(self, _):
         pending_actions = []
-        rebuild_recent = False
         with self._state_lock:
             if self._pending_actions:
                 pending_actions = list(self._pending_actions)
                 self._pending_actions.clear()
             if self._recent_dirty:
-                rebuild_recent = True
                 self._recent_dirty = False
-
-        if rebuild_recent:
-            self.menu_controller.rebuild_recent_menu()
 
         for command in pending_actions:
             self._perform_ui_action(command)
 
-        self.menu_controller.refresh_playback_items()
+        self._render_menu()
 
         if self.engine.is_playing:
             self.title = grid_to_braille(self.engine.dot_grid)
@@ -340,7 +403,8 @@ class YTBar(rumps.App):
             self._current_index = index
 
         start_time = self._clamp_start_time(track.duration, start_time)
-        self.menu_controller.set_now_playing(track.title, playback_mode)
+        self._now_playing_title = track.title
+        self._now_playing_playback_mode = playback_mode
 
         if playback_mode == "local" and track.local_path:
             source = track.absolute_local_path
@@ -519,6 +583,7 @@ class YTBar(rumps.App):
 
     def on_playpause(self, _):
         self._toggle_play_pause()
+        self._render_menu()
 
     def terminate(self):
         self._cleanup_before_quit()

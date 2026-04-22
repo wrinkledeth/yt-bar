@@ -63,6 +63,84 @@ class UICommand:
         return cls(UICommandKind.SEEK_DELTA, float(delta_seconds))
 
 
+class MenuActionKind(Enum):
+    PLAY_FROM_CLIPBOARD = "play_from_clipboard"
+    PLAY_PAUSE = "play_pause"
+    SEEK_PERCENT = "seek_percent"
+    PLAY_RECENT = "play_recent"
+    REMOVE_RECENT = "remove_recent"
+    TOGGLE_COMPACT_MENU = "toggle_compact_menu"
+    SET_SKIP_INTERVAL = "set_skip_interval"
+    SET_RECENT_LIMIT = "set_recent_limit"
+    RECENT_MENU_WILL_OPEN = "recent_menu_will_open"
+
+
+@dataclass(frozen=True)
+class MenuAction:
+    kind: MenuActionKind
+    percent: int | None = None
+    cache_key: str | None = None
+    seconds: float | None = None
+    recent_limit: int | None = None
+
+    @classmethod
+    def play_from_clipboard(cls):
+        return cls(MenuActionKind.PLAY_FROM_CLIPBOARD)
+
+    @classmethod
+    def play_pause(cls):
+        return cls(MenuActionKind.PLAY_PAUSE)
+
+    @classmethod
+    def seek_percent(cls, percent):
+        return cls(MenuActionKind.SEEK_PERCENT, percent=int(percent))
+
+    @classmethod
+    def play_recent(cls, cache_key):
+        return cls(MenuActionKind.PLAY_RECENT, cache_key=str(cache_key))
+
+    @classmethod
+    def remove_recent(cls, cache_key):
+        return cls(MenuActionKind.REMOVE_RECENT, cache_key=str(cache_key))
+
+    @classmethod
+    def toggle_compact_menu(cls):
+        return cls(MenuActionKind.TOGGLE_COMPACT_MENU)
+
+    @classmethod
+    def set_skip_interval(cls, seconds):
+        return cls(MenuActionKind.SET_SKIP_INTERVAL, seconds=float(seconds))
+
+    @classmethod
+    def set_recent_limit(cls, recent_limit):
+        return cls(MenuActionKind.SET_RECENT_LIMIT, recent_limit=int(recent_limit))
+
+    @classmethod
+    def recent_menu_will_open(cls):
+        return cls(MenuActionKind.RECENT_MENU_WILL_OPEN)
+
+
+@dataclass(frozen=True)
+class MenuRecentEntry:
+    cache_key: str
+    title: str
+
+
+@dataclass(frozen=True)
+class MenuSnapshot:
+    now_playing_title: str = "Not Playing"
+    playback_mode: str | None = None
+    progress_elapsed: float | None = None
+    progress_duration: float | None = None
+    active: bool = False
+    paused: bool = False
+    has_current_track: bool = False
+    compact_menu: bool = False
+    skip_interval: float = 30.0
+    recent_limit: int = 10
+    recent_entries: tuple[MenuRecentEntry, ...] = ()
+
+
 @dataclass
 class PlaybackGraphState:
     engine: object | None = None
