@@ -2,8 +2,9 @@
 
 ## Current Focus
 
-Phase 1, Phase 2, Phase 3, and Phase 4 Step 1 are complete. Phase 4 Step 2
-is the next active phase; later phases remain backlog context.
+Phase 1, Phase 2, Phase 3, Phase 4 Step 1, and Phase 4 Step 2 are
+complete. Phase 4 Step 3 is the next active phase; later phases remain backlog
+context.
 
 ## Phase 1: Cleanup - Done
 
@@ -178,9 +179,50 @@ is the next active phase; later phases remain backlog context.
 - Consider moving menu action/snapshot models into a dedicated menu/action module if `yt_bar.models` grows too broad during later extractions.
 - Manually test clipboard playback, pause/resume, seek, recents, compact menu, media keys, and title states before or during the next UI-touching phase.
 
+## Phase 4 Step 2: Recent Coordination Extraction - Done
+
+- Commit: `1e30405`
+- Completed:
+  - Added `RecentController` in `yt_bar/recent.py` to own recent-index state, dirty tracking, menu-ready recent entries, cache-refresh updates, removal, stale-track pruning, and recent-entry-to-playable-item conversion.
+  - Updated `YTBar` to delegate recent persistence and playlist-recent replay coordination to `RecentController`.
+  - Preserved `YTBar` ownership of playback state, menu snapshots, settings, timers, pending UI commands, and cache scheduling.
+  - Added focused recent-controller tests for cached-video recording, cache-refresh timestamp preservation, stale-track pruning, missing-entry removal, and dirty-state handling.
+- Validation passed:
+  - `uv run pytest tests/test_recent.py -q`
+  - `uv run ruff check yt_bar/recent.py yt_bar/app.py tests/test_recent.py`
+  - `uv run ruff format --check yt_bar/recent.py yt_bar/app.py tests/test_recent.py`
+  - `uv run pytest -q`
+  - `uv run ruff check .`
+  - `uv run ruff format --check .`
+  - `.venv/bin/python -m compileall yt_bar.py yt_bar`
+  - Restarted the installed LaunchAgent and verified `launchctl print` reported `state = running`.
+- Manual clipboard playback, recents menu interaction, seek, compact menu, title-state, and media-key checks were skipped beyond launch/process verification.
+
+## Phase 4 Step 2 Decisions And Deviations
+
+- `RecentController` is intentionally a plain Python controller with its own lock so cache worker callbacks do not need to acquire `YTBar`'s UI/playback state lock.
+- `MenuRecentEntry` remains in `yt_bar.models`; the new controller returns menu-ready entries without exposing storage internals to `MenuController`.
+- `YTBar` still owns `MenuSnapshot` construction so now-playing title, playback badge, progress, settings checkmarks, and transport state remain centralized at the app boundary.
+- No visible menu behavior changes were intended, and `AGENTS.md` / `README.md` were left unchanged while the broader module layout continues to move.
+- Phase 4 Step 2 was scoped to recent and playlist-recent coordination only; playback coordination extraction remains a separate follow-up step.
+
+## Phase 4 Step 2 Discoveries For Future Phases
+
+- `YTBar` is now thinner around recent state, but still owns track list, current index, current item generation, playback mode, cache scheduling, resolver thread startup, and remote/Now Playing synchronization.
+- The cache subsystem can continue using a simple callback boundary for recent refreshes; the recent controller shields cache workers from UI-thread state.
+- Recent dirty tracking is consumed during the visualization tick only to preserve the existing render cadence; future UI refresh work may be able to remove this explicit dirty flag if menu rendering becomes event-driven.
+- `AGENTS.md` project-structure notes now lag the extracted `yt_bar/recent.py` module, but broader docs updates are still better deferred until the remaining coordinator split is settled.
+
+## Phase 4 Step 2 Out-Of-Scope Follow-Ups
+
+- Extract playback coordination from `YTBar`, including current track selection, playlist advancement, playback mode/generation state, cache scheduling triggers, and resolver-to-playback handoff.
+- Add app-level tests or fakes around `YTBar` playback/menu action routing once playback coordination has a pure boundary.
+- Manually test clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance before closing the broader UI/playback refactor.
+- Update `AGENTS.md` and any user-facing docs for the final module ownership layout once the Phase 4 coordinator extraction is complete.
+
 ## Phase 4 Remaining Structural Refactors
 
-- Extract `YTBar` responsibilities into recent and playback coordination modules.
+- Extract remaining `YTBar` playback coordination responsibilities into a focused module.
 - Split `AudioEngine` last into decoder, AVFoundation session, and stereometer-focused modules while keeping `AudioEngine` as the public facade.
 
 ## Validation
