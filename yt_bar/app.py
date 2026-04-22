@@ -13,11 +13,11 @@ from .models import (
     MenuAction,
     MenuActionKind,
     MenuSnapshot,
-    ResolvedItem,
     UICommand,
     UICommandKind,
 )
 from .objc_bridges import schedule_common_mode_timer
+from .playback import LOCAL_PLAYBACK_MODE, PlaybackController
 from .recent import RecentController
 from .remote_commands import RemoteCommandController
 from .resolver import resolve_url
@@ -34,15 +34,11 @@ class YTBar(rumps.App):
         self._state_lock = threading.RLock()
 
         self.engine = AudioEngine()
-        self._tracks = []
-        self._current_index = -1
-        self._current_item: ResolvedItem | None = None
-        self._current_playback_mode = "stream"
+        self.playback = PlaybackController(lock=self._state_lock)
         self._now_playing_title = "Not Playing"
         self._now_playing_playback_mode = None
         self._progress_elapsed = None
         self._progress_duration = None
-        self._current_item_generation = 0
         self._pending_actions = deque()
         self._cleanup_done = False
 
@@ -87,16 +83,10 @@ class YTBar(rumps.App):
         return max(0.0, min(start_time, max_start))
 
     def _current_track(self):
-        with self._state_lock:
-            if 0 <= self._current_index < len(self._tracks):
-                return self._tracks[self._current_index]
-        return None
+        return self.playback.current_track()
 
     def _current_track_snapshot(self):
-        with self._state_lock:
-            if 0 <= self._current_index < len(self._tracks):
-                return self._current_index, self._tracks[self._current_index]
-        return -1, None
+        return self.playback.current_track_snapshot()
 
     def _enqueue_ui_action(self, command):
         with self._state_lock:
@@ -107,7 +97,6 @@ class YTBar(rumps.App):
         self.menu = layout
 
     def _menu_snapshot(self):
-        current_index, track = self._current_track_snapshot()
         return MenuSnapshot(
             now_playing_title=self._now_playing_title,
             playback_mode=self._now_playing_playback_mode,
@@ -115,7 +104,7 @@ class YTBar(rumps.App):
             progress_duration=self._progress_duration,
             active=self.engine.is_active,
             paused=self.engine.is_paused,
-            has_current_track=track is not None and current_index >= 0,
+            has_current_track=self.playback.has_current_track(),
             compact_menu=self._compact_menu,
             skip_interval=self._skip_interval,
             recent_limit=self._recent_limit,
@@ -236,10 +225,7 @@ class YTBar(rumps.App):
 
     def _skip_forward_to_next_track(self):
         paused = self.engine.is_paused
-        with self._state_lock:
-            next_index = self._current_index + 1
-            if next_index >= len(self._tracks):
-                next_index = None
+        next_index = self.playback.next_track_index()
 
         if next_index is None:
             self.engine.stop()
@@ -339,8 +325,8 @@ class YTBar(rumps.App):
 
     def _on_track_finished(self):
         with self._state_lock:
-            if self._current_index + 1 < len(self._tracks):
-                self._current_index += 1
+            advance = self.playback.advance_after_track_finished()
+            if advance.has_next_track:
                 self._pending_actions.append(UICommand.play())
             else:
                 self._pending_actions.append(UICommand.stopped())
@@ -349,30 +335,21 @@ class YTBar(rumps.App):
         self._enqueue_ui_action(UICommand.stopped())
 
     def _play_track(self, index, start_time=0, paused=False):
-        with self._state_lock:
-            if index < 0 or index >= len(self._tracks):
-                return
-            track = self._tracks[index]
-            playback_mode = self._current_playback_mode
-            self._current_index = index
+        track_playback = self.playback.select_track(index)
+        if track_playback is None:
+            return
 
+        track = track_playback.track
         start_time = self._clamp_start_time(track.duration, start_time)
         self._now_playing_title = track.title
-        self._now_playing_playback_mode = playback_mode
-
-        if playback_mode == "local" and track.local_path:
-            source = track.absolute_local_path
-            is_local = True
-        else:
-            source = track.source_url
-            is_local = False
+        self._now_playing_playback_mode = track_playback.playback_mode
 
         self.engine.play(
-            source,
+            track_playback.source,
             on_finished=self._on_track_finished,
             on_stopped=self._on_engine_stopped,
             duration=track.duration,
-            is_local=is_local,
+            is_local=track_playback.is_local,
             start_time=start_time,
             paused=paused,
         )
@@ -390,31 +367,19 @@ class YTBar(rumps.App):
         self.recent.record_item_played(item, last_played=last_played)
 
     def _is_cache_item_still_current(self, item, generation):
-        with self._state_lock:
-            is_current_item = (
-                generation == self._current_item_generation
-                and self._current_item is not None
-                and self._current_item.cache_key == item.cache_key
-                and self._current_playback_mode == "stream"
-            )
+        is_current_item = self.playback.is_current_stream_item(item, generation)
         return is_current_item and (self.engine.is_active or self.engine.is_paused)
 
     def _start_item_playback(self, item, *, playback_mode):
         self.engine.stop()
 
         with self._state_lock:
-            self._current_item = item
-            self._tracks = list(item.tracks)
-            self._current_index = 0
-            # Do not reroute a live stream to local mid-track. Cache only affects future plays.
-            self._current_playback_mode = playback_mode
-            self._current_item_generation += 1
-            generation = self._current_item_generation
+            playback_start = self.playback.start_item(item, playback_mode=playback_mode)
             self._pending_actions.append(UICommand.play())
 
         self._record_item_played(item)
-        if playback_mode == "stream":
-            self.cache.schedule_delayed_cache(item, generation)
+        if playback_start.should_cache:
+            self.cache.schedule_delayed_cache(item, playback_start.generation)
         else:
             self.cache.cancel_delay()
 
@@ -423,7 +388,7 @@ class YTBar(rumps.App):
         if item is None:
             return
 
-        self._start_item_playback(item, playback_mode="local")
+        self._start_item_playback(item, playback_mode=LOCAL_PLAYBACK_MODE)
 
     def on_paste_url(self, _):
         url = self._get_clipboard().strip().replace("\\", "")
@@ -437,7 +402,7 @@ class YTBar(rumps.App):
                     self._enqueue_ui_action(UICommand.stopped())
                 return
 
-            playback_mode = "local" if item.is_fully_cached() else "stream"
+            playback_mode = self.playback.playback_mode_for_item(item)
             self._start_item_playback(item, playback_mode=playback_mode)
 
         threading.Thread(target=_resolve_and_play, daemon=True).start()

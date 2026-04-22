@@ -8,6 +8,8 @@
 - `yt_bar.py` is the LaunchAgent-compatible entry shim; keep it present because `install.sh` points at it.
 - `yt_bar/app.py` contains `YTBar(rumps.App)` and `main()`.
 - `yt_bar/audio_engine.py` contains the playback engine and decoder pipeline.
+- `yt_bar/playback.py` owns current track, playlist advancement, playback mode/generation, and cache-trigger coordination state.
+- `yt_bar/recent.py` owns recent-index state, menu-ready recent entries, stale pruning, and recent-to-playable-item conversion.
 - `yt_bar/menu.py`, `yt_bar/cache.py`, `yt_bar/remote_commands.py`, `yt_bar/storage.py`, and `yt_bar/resolver.py` own the corresponding app subsystems.
 - `yt_bar/constants.py`, `yt_bar/models.py`, `yt_bar/utils.py`, `yt_bar/objc_bridges.py`, `yt_bar/core_audio.py`, `yt_bar/media_player.py`, and `yt_bar/visualizer.py` provide shared helpers and platform bridges.
 - `CLAUDE.md` should stay a relative symlink to `AGENTS.md`.
@@ -65,13 +67,24 @@
 - `YTBar` (`yt_bar/app.py`) owns:
   - the `rumps` menu bar app
   - clipboard URL intake
-  - hidden ordered playlist state
-  - recent-index persistence in `songs/recent.json`
-  - delayed background caching into `songs/`
+  - resolver thread startup and resolver-to-playback handoff
+  - playback/menu action routing
   - seek controls
   - progress updates
   - MediaPlayer remote-command / Now Playing integration
   - menu bar icon/title state
+- `PlaybackController` (`yt_bar/playback.py`) owns:
+  - hidden ordered playlist state
+  - current track selection and playlist advancement
+  - playback mode and current-item generation state
+  - cache scheduling intent for newly started items
+- `RecentController` (`yt_bar/recent.py`) owns:
+  - recent-index persistence in `songs/recent.json`
+  - cached-track pruning and recent item removal
+  - playlist-recent replay conversion to cached playable items
+- `CacheManager` (`yt_bar/cache.py`) owns:
+  - delayed background caching into `songs/`
+  - cache worker scheduling and duplicate suppression
 
 ## Threading Rules
 - Treat AppKit and `rumps` UI state as main-thread-only.
@@ -79,7 +92,9 @@
   - URL resolution (`yt_bar/resolver.py`)
   - decoder subprocess I/O (`yt_bar/audio_engine.py`)
   - the serial playback worker
+  - cache worker downloads (`yt_bar/cache.py`)
 - Use the existing `_pending_actions` queue handoff pattern for UI mutations triggered by worker threads or MediaPlayer remote-command callbacks.
+- `YTBar` and `PlaybackController` share the app `_state_lock`; preserve that lock boundary when changing current-track, playlist, or pending-action flow.
 - Do not update menu items, titles, or other AppKit-driven state directly from playback or resolver threads.
 - Do not mutate playback state directly from PyObjC callbacks, CoreAudio listeners, or mixer taps; those paths enqueue work back onto `AudioEngine`'s worker.
 
@@ -118,7 +133,7 @@
 - Streamed seek still restarts playback with `ffmpeg -ss` on piped input.
 - The streamed path remains slower for larger offsets because `ffmpeg` must consume data to reach the target.
 - Seek now preserves paused state across both the menu submenu and media-key skip commands.
-- `SEEK_TRACE_LOGGING` in `yt_bar/constants.py` currently emits local-seek timing milestones to stdout for debugging.
+- Local-seek trace logging is disabled by default. Set `YT_BAR_SEEK_TRACE` to `1`, `true`, `yes`, or `on` at process start to enable `SEEK_TRACE_LOGGING` milestones on stdout.
 - Playlist playback is intentionally hidden from the menu; preserve auto-advance even though there is no queue UI.
 - Playback is decoded at a fixed internal `48 kHz stereo float32` format and the engine mixer converts to the active hardware format.
 - Output-device handoff is driven by native route/config notifications, not polling.
