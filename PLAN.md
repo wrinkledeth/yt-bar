@@ -2,8 +2,8 @@
 
 ## Current Focus
 
-Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is the next active phase;
-later phases remain backlog context.
+Phase 1, Phase 2, Phase 3, and Phase 4 Step 1 are complete. Phase 4 Step 2
+is the next active phase; later phases remain backlog context.
 
 ## Phase 1: Cleanup - Done
 
@@ -138,9 +138,48 @@ later phases remain backlog context.
 - Update remote command dispatch, UI action enqueueing, and UI action handling to use that model.
 - Split `PlaybackSession` state mechanically into smaller dataclasses while preserving public `AudioEngine` behavior.
 
-## Phase 4: Structural Refactors
+## Phase 4 Step 1: Menu Controller Decoupling - Done
 
-- Decouple `MenuController` first with explicit menu actions and menu state snapshots.
+- Commit: `d4685c1`
+- Completed:
+  - Added typed `MenuAction` / `MenuActionKind`, `MenuRecentEntry`, and `MenuSnapshot` models.
+  - Updated `MenuController` to render from snapshots and dispatch explicit menu actions instead of reading `YTBar` or `AudioEngine` state directly.
+  - Updated `YTBar` to build menu snapshots, own menu display state, and handle menu actions centrally.
+  - Added focused model tests for menu actions and snapshots.
+- Validation passed:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_models.py -q`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check yt_bar/models.py yt_bar/menu.py yt_bar/app.py tests/test_models.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check yt_bar/models.py yt_bar/menu.py yt_bar/app.py tests/test_models.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check .`
+  - `.venv/bin/python -m compileall yt_bar.py yt_bar`
+  - Restarted the installed LaunchAgent and verified `launchctl print` reported `state = running`.
+- Manual playback/menu/media-key checks were skipped beyond launch/process verification.
+
+## Phase 4 Step 1 Decisions And Deviations
+
+- The menu action/snapshot model lives in `yt_bar.models` with the other shared dataclasses.
+- `MenuController` now receives a dispatcher and layout callback; it no longer stores or reaches through a `YTBar` app object.
+- `YTBar` owns now-playing and progress render state so menu snapshots remain explicit and replayable.
+- `UICommand` remains the background/remote-command queue model; `MenuAction` is scoped to direct menu callbacks.
+- No visible menu behavior changes were intended, and `AGENTS.md` / `README.md` were left unchanged.
+
+## Phase 4 Step 1 Discoveries For Future Phases
+
+- Future `YTBar` coordinator extraction should preserve snapshot ownership for now-playing title, playback badge, progress elapsed/duration, settings checkmarks, recent entries, and transport enabled state.
+- Recent updates now naturally flow through snapshot rendering; future recent extraction can expose menu-ready recent entries instead of giving `MenuController` store access.
+- `MenuController` is still AppKit/rumps-bound because it constructs real menu items and uses attributed header helpers, so deeper pure tests would need a small adapter or test doubles.
+- Launch log files may contain stale playback errors; launch verification should continue using LaunchAgent state/process checks plus log modification times.
+
+## Phase 4 Step 1 Out-Of-Scope Follow-Ups
+
+- Add focused menu-controller tests with rumps/AppKit fakes if menu rendering behavior changes again.
+- Consider moving menu action/snapshot models into a dedicated menu/action module if `yt_bar.models` grows too broad during later extractions.
+- Manually test clipboard playback, pause/resume, seek, recents, compact menu, media keys, and title states before or during the next UI-touching phase.
+
+## Phase 4 Remaining Structural Refactors
+
 - Extract `YTBar` responsibilities into recent and playback coordination modules.
 - Split `AudioEngine` last into decoder, AVFoundation session, and stereometer-focused modules while keeping `AudioEngine` as the public facade.
 
