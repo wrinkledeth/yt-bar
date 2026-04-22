@@ -2,7 +2,8 @@
 
 ## Current Focus
 
-Phase 1 is complete. Phase 2 is the next active phase; later phases remain backlog context.
+Phase 1 and Phase 2 are complete. Phase 3 is the next active phase; later phases remain
+backlog context.
 
 ## Phase 1: Cleanup - Done
 
@@ -38,7 +39,7 @@ Phase 1 is complete. Phase 2 is the next active phase; later phases remain backl
 
 - Update the `AGENTS.md` seek caveat because the current line saying `SEEK_TRACE_LOGGING` emits logs by default is now stale.
 - Consider documenting `YT_BAR_SEEK_TRACE` in README or `.env.example` if user-facing troubleshooting docs are expanded.
-- Add a small focused test for the `YT_BAR_SEEK_TRACE` truthy-value parsing if Phase 2 test coverage includes configuration constants.
+- Add a small focused test for the `YT_BAR_SEEK_TRACE` truthy-value parsing if configuration constants get their own test coverage.
 
 ## Phase 1 Original Criteria
 
@@ -50,7 +51,44 @@ Phase 1 is complete. Phase 2 is the next active phase; later phases remain backl
 - Gate seek trace logs behind `YT_BAR_SEEK_TRACE`; default off.
 - Preserve current seek trace behavior only when the env value is one of `1`, `true`, `yes`, or `on`.
 
-## Phase 2: Tests Before Refactors
+## Phase 2: Tests Before Refactors - Done
+
+- Commit: `9f6b7f2`
+- Completed:
+  - Added focused resolver tests for URL source selection, YouTube fallback URLs, track construction, playlist resolution, and playlist-to-single fallback.
+  - Added focused storage tests for settings defaults/round trips, recent-index load/save ordering, and stale cached-track pruning.
+  - Added focused cache tests for delayed-cache gating, job scheduling, duplicate suppression, successful partial-file promotion, and failed-download cleanup.
+  - Added focused utils/visualizer tests for cache keys, duration/time formatting, title truncation, progress bars, and braille grid rendering.
+- Validation passed:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check .`
+  - `.venv/bin/python -m compileall yt_bar.py yt_bar`
+- Manual app launch/UI playback checks were skipped because Phase 2 only added pure/module tests and did not change production app behavior.
+
+## Phase 2 Decisions And Deviations
+
+- No production code was changed during Phase 2.
+- Resolver tests isolate `yt-dlp` behavior by monkeypatching `run_yt_dlp_json`; they do not require network access or external binaries.
+- Cache tests intentionally cover current underscored `CacheManager` scheduling/download helpers to pin behavior before structural refactors; this is test coverage for current module internals, not a decision to keep those helpers private forever.
+- Cache download tests monkeypatch `yt_bar.models.partial_cache_abspath_for_id` so partial-file assertions stay inside `tmp_path`.
+- Audio-engine behavioral tests remained out of scope, matching the original Phase 2 guidance to wait until after extraction.
+
+## Phase 2 Discoveries For Future Phases
+
+- `TrackInfo.partial_local_path` is derived from the global `SONGS_DIR` path via `partial_cache_abspath_for_id`, while `CacheManager` accepts an injected `songs_dir`; future cache extraction should align cache path ownership.
+- `CacheManager.enqueue_cache_jobs_for_item` refreshes recent metadata before checking whether any track actually needs a cache job; future refactors should preserve or intentionally change that side effect.
+- `resolve_playlist` uses the original entry index for fallback titles, so skipped non-dict entries can make titles jump, for example from `Track 1` to `Track 3`.
+- Importing `yt_bar.utils` still imports AppKit/Foundation because `_set_header_title` lives beside pure formatting helpers; future pure-test portability would improve if UI header rendering moved behind a smaller bridge module.
+- `grid_to_braille` treats the threshold as strictly greater than `0.18`; values equal to `0.18` remain unlit.
+
+## Phase 2 Out-Of-Scope Follow-Ups
+
+- Add configuration-constant tests for `YT_BAR_SEEK_TRACE` truthy-value parsing.
+- Consider splitting `_set_header_title` out of `yt_bar.utils` if future refactors aim to keep pure formatting helpers independent of PyObjC imports.
+- Consider making partial-cache path construction a single responsibility owned by the cache subsystem, especially before splitting cache/download modules.
+
+## Phase 2 Original Criteria
 
 - Add focused pure/module tests for resolver behavior, storage load/save and stale pruning, cache scheduling/download paths, and utils/visualizer formatting.
 - Keep audio-engine behavioral tests minimal until after extraction; test pure predicates/helpers only if they become easy during cleanup.
