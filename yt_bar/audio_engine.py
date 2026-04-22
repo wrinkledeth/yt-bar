@@ -292,7 +292,7 @@ class AudioEngine:
 
         self._begin_seek_trace(current_session, target)
         request = self._resume_request(current_session, start_time=target)
-        if current_session.rebuild_pending:
+        if current_session.route.rebuild_pending:
             self._log_seek_trace(
                 current_session,
                 "fallback_full_restart",
@@ -329,8 +329,8 @@ class AudioEngine:
         if current_session is None or session_id not in (None, current_session.id):
             return current_session, False
 
-        current_session.rebuild_pending = True
-        current_session.rebuild_deadline = time.monotonic() + ROUTE_CHANGE_DEBOUNCE_SECONDS
+        current_session.route.rebuild_pending = True
+        current_session.route.rebuild_deadline = time.monotonic() + ROUTE_CHANGE_DEBOUNCE_SECONDS
         print(
             "Route change detected",
             {"reason": reason, "session_id": current_session.id},
@@ -339,7 +339,7 @@ class AudioEngine:
 
     def _handle_decoder_eof_command(self, current_session, session_id, generation):
         if self._is_current_decoder_generation(current_session, session_id, generation):
-            current_session.decoder_eof = True
+            current_session.decoder.eof = True
         return current_session, False
 
     def _handle_decoder_failed_command(
@@ -350,8 +350,8 @@ class AudioEngine:
         error_text,
     ):
         if self._is_current_decoder_generation(current_session, session_id, generation):
-            current_session.decoder_failed = True
-            current_session.decoder_error = error_text
+            current_session.decoder.failed = True
+            current_session.decoder.error = error_text
         return current_session, False
 
     def _handle_buffer_complete_command(
@@ -362,7 +362,7 @@ class AudioEngine:
         _callback_type,
     ):
         if current_session is not None and current_session.id == session_id:
-            current_session.scheduled_buffers.pop(buffer_id, None)
+            current_session.schedule.buffers.pop(buffer_id, None)
         return current_session, False
 
     def _handle_shutdown_command(self, current_session):
@@ -374,7 +374,7 @@ class AudioEngine:
         return (
             session is not None
             and session.id == session_id
-            and session.decoder_generation == generation
+            and session.decoder.generation == generation
         )
 
     def _attempt_start_request(self, request):
@@ -417,7 +417,7 @@ class AudioEngine:
     def _create_session(self, request):
         self._session_counter += 1
         session = PlaybackSession(id=self._session_counter, request=request)
-        session.last_elapsed_seconds = request.start_time
+        session.schedule.last_elapsed_seconds = request.start_time
 
         try:
             self._build_engine(session)
@@ -448,48 +448,48 @@ class AudioEngine:
             return
 
         self._seek_trace_counter += 1
-        session.seek_trace_id = self._seek_trace_counter
-        session.seek_trace_started_at = time.perf_counter()
-        session.seek_trace_target = max(0.0, float(target))
-        session.seek_trace_first_chunk_logged = False
-        session.seek_trace_first_buffer_logged = False
-        session.seek_trace_player_play_logged = False
-        session.seek_trace_elapsed_logged = False
+        session.seek_trace.id = self._seek_trace_counter
+        session.seek_trace.started_at = time.perf_counter()
+        session.seek_trace.target = max(0.0, float(target))
+        session.seek_trace.first_chunk_logged = False
+        session.seek_trace.first_buffer_logged = False
+        session.seek_trace.player_play_logged = False
+        session.seek_trace.elapsed_logged = False
         self._log_seek_trace(
             session,
             "requested",
-            current_elapsed=round(session.last_elapsed_seconds, 3),
+            current_elapsed=round(session.schedule.last_elapsed_seconds, 3),
         )
 
     def _log_seek_trace(self, session, event, **payload):
-        if not SEEK_TRACE_LOGGING or session.seek_trace_id == 0:
+        if not SEEK_TRACE_LOGGING or session.seek_trace.id == 0:
             return
 
         details = {
-            "seek_id": session.seek_trace_id,
+            "seek_id": session.seek_trace.id,
             "event": event,
-            "ms": round((time.perf_counter() - session.seek_trace_started_at) * 1000, 1),
-            "target": round(session.seek_trace_target, 3),
+            "ms": round((time.perf_counter() - session.seek_trace.started_at) * 1000, 1),
+            "target": round(session.seek_trace.target, 3),
             "paused": bool(session.paused),
-            "generation": session.decoder_generation,
+            "generation": session.decoder.generation,
         }
         details.update(payload)
         print("Seek trace", details)
 
     def _finish_seek_trace(self, session, event=None, **payload):
-        if not SEEK_TRACE_LOGGING or session.seek_trace_id == 0:
+        if not SEEK_TRACE_LOGGING or session.seek_trace.id == 0:
             return
 
         if event is not None:
             self._log_seek_trace(session, event, **payload)
 
-        session.seek_trace_id = 0
-        session.seek_trace_started_at = 0.0
-        session.seek_trace_target = 0.0
-        session.seek_trace_first_chunk_logged = False
-        session.seek_trace_first_buffer_logged = False
-        session.seek_trace_player_play_logged = False
-        session.seek_trace_elapsed_logged = False
+        session.seek_trace.id = 0
+        session.seek_trace.started_at = 0.0
+        session.seek_trace.target = 0.0
+        session.seek_trace.first_chunk_logged = False
+        session.seek_trace.first_buffer_logged = False
+        session.seek_trace.player_play_logged = False
+        session.seek_trace.elapsed_logged = False
 
     def _build_engine(self, session):
         engine = AVFoundation.AVAudioEngine.alloc().init()
@@ -506,10 +506,10 @@ class AudioEngine:
         engine.connect_to_format_(player, mixer, audio_format)
         engine.outputNode()
 
-        session.engine = engine
-        session.player = player
-        session.mixer = mixer
-        session.format = audio_format
+        session.graph.engine = engine
+        session.graph.player = player
+        session.graph.mixer = mixer
+        session.graph.format = audio_format
 
         self._register_engine_observer(session)
         self._install_visualizer_tap(session)
@@ -525,36 +525,36 @@ class AudioEngine:
             observer,
             "handleConfigChange:",
             AVFoundation.AVAudioEngineConfigurationChangeNotification,
-            session.engine,
+            session.graph.engine,
         )
-        session.notification_observer = observer
+        session.graph.notification_observer = observer
 
     def _install_visualizer_tap(self, session):
-        tap_format = session.mixer.outputFormatForBus_(0)
+        tap_format = session.graph.mixer.outputFormatForBus_(0)
 
         def tap_block(buffer, when, sid=session.id):
             self._capture_visualizer_snapshot(sid, buffer)
 
-        session.mixer.installTapOnBus_bufferSize_format_block_(
+        session.graph.mixer.installTapOnBus_bufferSize_format_block_(
             0,
             VISUALIZER_TAP_BUFFER_FRAMES,
             tap_format,
             tap_block,
         )
-        session.tap_block = tap_block
+        session.graph.tap_block = tap_block
 
     def _start_decoder_thread(self, session):
-        session.decoder_generation += 1
-        generation = session.decoder_generation
+        session.decoder.generation += 1
+        generation = session.decoder.generation
         decoder_stop_event = threading.Event()
-        session.decoder_stop_event = decoder_stop_event
-        session.decoded_queue = queue.Queue(maxsize=DECODER_QUEUE_BUFFERS)
-        session.decoder_thread = threading.Thread(
+        session.decoder.stop_event = decoder_stop_event
+        session.decoder.queue = queue.Queue(maxsize=DECODER_QUEUE_BUFFERS)
+        session.decoder.thread = threading.Thread(
             target=self._decoder_loop,
-            args=(session, generation, decoder_stop_event, session.decoded_queue),
+            args=(session, generation, decoder_stop_event, session.decoder.queue),
             daemon=True,
         )
-        session.decoder_thread.start()
+        session.decoder.thread.start()
 
     def _decoder_loop(self, session, generation, decoder_stop_event, decoded_queue):
         ytdlp_process = None
@@ -626,8 +626,8 @@ class AudioEngine:
                 if ytdlp_process.stdout is not None:
                     ytdlp_process.stdout.close()
 
-            session.ytdlp_process = ytdlp_process
-            session.ffmpeg_process = ffmpeg_process
+            session.decoder.ytdlp_process = ytdlp_process
+            session.decoder.ffmpeg_process = ffmpeg_process
 
             bytes_per_chunk = PCM_BUFFER_FRAMES * PCM_BYTES_PER_FRAME
             while not session.stop_event.is_set() and not decoder_stop_event.is_set():
@@ -641,11 +641,11 @@ class AudioEngine:
 
                 chunk = np.frombuffer(data[:usable], dtype=np.float32).reshape(-1, CHANNELS).copy()
                 if (
-                    session.seek_trace_id != 0
-                    and session.decoder_generation == generation
-                    and not session.seek_trace_first_chunk_logged
+                    session.seek_trace.id != 0
+                    and session.decoder.generation == generation
+                    and not session.seek_trace.first_chunk_logged
                 ):
-                    session.seek_trace_first_chunk_logged = True
+                    session.seek_trace.first_chunk_logged = True
                     self._log_seek_trace(
                         session,
                         "first_pcm_chunk",
@@ -677,17 +677,17 @@ class AudioEngine:
         finally:
             self._cleanup_process(ffmpeg_process)
             self._cleanup_process(ytdlp_process)
-            if session.decoder_generation == generation:
-                session.ffmpeg_process = None
-                session.ytdlp_process = None
+            if session.decoder.generation == generation:
+                session.decoder.ffmpeg_process = None
+                session.decoder.ytdlp_process = None
 
     def _service_session(self, session):
         self._refresh_elapsed(session)
 
-        if session.rebuild_pending and time.monotonic() >= session.rebuild_deadline:
+        if session.route.rebuild_pending and time.monotonic() >= session.route.rebuild_deadline:
             request = self._resume_request(
                 session,
-                start_time=session.last_elapsed_seconds,
+                start_time=session.schedule.last_elapsed_seconds,
                 retry_kind="route_change",
                 retry_attempt=0,
             )
@@ -703,14 +703,14 @@ class AudioEngine:
 
         if (
             not session.paused
-            and session.scheduled_frames_total > 0
-            and not session.started_playback
+            and session.schedule.frames_total > 0
+            and not session.schedule.started_playback
         ):
             try:
-                session.player.play()
-                session.started_playback = True
-                if session.seek_trace_id != 0 and not session.seek_trace_player_play_logged:
-                    session.seek_trace_player_play_logged = True
+                session.graph.player.play()
+                session.schedule.started_playback = True
+                if session.seek_trace.id != 0 and not session.seek_trace.player_play_logged:
+                    session.seek_trace.player_play_logged = True
                     self._log_seek_trace(
                         session,
                         "player_play_called",
@@ -721,7 +721,7 @@ class AudioEngine:
                 log_exception("AVAudioPlayerNode play failed", exc)
                 request = self._resume_request(
                     session,
-                    start_time=session.last_elapsed_seconds,
+                    start_time=session.schedule.last_elapsed_seconds,
                     retry_kind="route_change",
                     retry_attempt=0,
                 )
@@ -750,7 +750,7 @@ class AudioEngine:
         if self._should_stop_for_error(session):
             print(
                 "Playback stopped due to decoder failure",
-                {"error": session.decoder_error},
+                {"error": session.decoder.error},
             )
             callback = session.on_stopped
             self._discard_session(
@@ -768,18 +768,18 @@ class AudioEngine:
     def _schedule_available_buffers(self, session):
         while self._scheduled_ahead_frames(session) < SCHEDULE_AHEAD_FRAMES:
             try:
-                chunk = session.decoded_queue.get_nowait()
+                chunk = session.decoder.queue.get_nowait()
             except queue.Empty:
                 break
 
             if chunk is None or len(chunk) == 0:
                 continue
 
-            buffer = self._make_pcm_buffer(session.format, chunk)
-            buffer_id = session.next_buffer_id
-            session.next_buffer_id += 1
-            session.scheduled_buffers[buffer_id] = buffer
-            session.scheduled_frames_total += len(chunk)
+            buffer = self._make_pcm_buffer(session.graph.format, chunk)
+            buffer_id = session.schedule.next_buffer_id
+            session.schedule.next_buffer_id += 1
+            session.schedule.buffers[buffer_id] = buffer
+            session.schedule.frames_total += len(chunk)
 
             def completion_handler(
                 callback_type,
@@ -794,13 +794,13 @@ class AudioEngine:
                 )
 
             try:
-                session.player.scheduleBuffer_completionCallbackType_completionHandler_(
+                session.graph.player.scheduleBuffer_completionCallbackType_completionHandler_(
                     buffer,
                     AVFoundation.AVAudioPlayerNodeCompletionDataPlayedBack,
                     completion_handler,
                 )
-                if session.seek_trace_id != 0 and not session.seek_trace_first_buffer_logged:
-                    session.seek_trace_first_buffer_logged = True
+                if session.seek_trace.id != 0 and not session.seek_trace.first_buffer_logged:
+                    session.seek_trace.first_buffer_logged = True
                     scheduled_ahead_frames = int(self._scheduled_ahead_frames(session))
                     self._log_seek_trace(
                         session,
@@ -816,8 +816,8 @@ class AudioEngine:
                         )
             except Exception as exc:
                 log_exception("scheduleBuffer failed", exc)
-                session.rebuild_pending = True
-                session.rebuild_deadline = time.monotonic()
+                session.route.rebuild_pending = True
+                session.route.rebuild_deadline = time.monotonic()
                 break
 
     def _set_paused(self, session, paused):
@@ -826,55 +826,59 @@ class AudioEngine:
 
         if paused:
             try:
-                session.player.pause()
+                session.graph.player.pause()
             except Exception as exc:
                 log_exception("AVAudioPlayerNode pause failed", exc)
             self._publish_state(active=True, starting=False, paused=True)
             return
 
-        self._publish_state(active=True, starting=not session.started_playback, paused=False)
-        if session.started_playback and self._scheduled_ahead_frames(session) > 0:
+        self._publish_state(
+            active=True,
+            starting=not session.schedule.started_playback,
+            paused=False,
+        )
+        if session.schedule.started_playback and self._scheduled_ahead_frames(session) > 0:
             try:
-                session.player.play()
+                session.graph.player.play()
                 self._publish_state(active=True, starting=False, paused=False)
             except Exception as exc:
                 log_exception("AVAudioPlayerNode resume failed", exc)
-                session.rebuild_pending = True
-                session.rebuild_deadline = time.monotonic()
+                session.route.rebuild_pending = True
+                session.route.rebuild_deadline = time.monotonic()
 
     def _scheduled_ahead_frames(self, session):
-        return max(0, session.scheduled_frames_total - session.last_rendered_frames)
+        return max(0, session.schedule.frames_total - session.schedule.last_rendered_frames)
 
     def _refresh_elapsed(self, session):
-        elapsed = session.last_elapsed_seconds
+        elapsed = session.schedule.last_elapsed_seconds
 
-        if session.player is not None and session.started_playback:
+        if session.graph.player is not None and session.schedule.started_playback:
             try:
-                render_time = session.player.lastRenderTime()
+                render_time = session.graph.player.lastRenderTime()
                 if render_time is not None:
-                    player_time = session.player.playerTimeForNodeTime_(render_time)
+                    player_time = session.graph.player.playerTimeForNodeTime_(render_time)
                 else:
                     player_time = None
 
                 if player_time is not None and player_time.isSampleTimeValid():
                     sample_time = max(0, int(player_time.sampleTime()))
-                    session.last_rendered_frames = max(
-                        session.last_rendered_frames,
+                    session.schedule.last_rendered_frames = max(
+                        session.schedule.last_rendered_frames,
                         sample_time,
                     )
                     elapsed = session.base_offset_seconds + (
-                        session.last_rendered_frames / INTERNAL_SAMPLE_RATE
+                        session.schedule.last_rendered_frames / INTERNAL_SAMPLE_RATE
                     )
                     if (
-                        session.seek_trace_id != 0
-                        and not session.seek_trace_elapsed_logged
-                        and session.last_rendered_frames > 0
+                        session.seek_trace.id != 0
+                        and not session.seek_trace.elapsed_logged
+                        and session.schedule.last_rendered_frames > 0
                     ):
-                        session.seek_trace_elapsed_logged = True
+                        session.seek_trace.elapsed_logged = True
                         self._finish_seek_trace(
                             session,
                             "first_elapsed_advance",
-                            rendered_frames=int(session.last_rendered_frames),
+                            rendered_frames=int(session.schedule.last_rendered_frames),
                             elapsed=round(elapsed, 3),
                         )
                 else:
@@ -887,30 +891,30 @@ class AudioEngine:
         if session.duration > 0:
             elapsed = min(elapsed, session.duration)
 
-        session.last_elapsed_seconds = elapsed
+        session.schedule.last_elapsed_seconds = elapsed
         self._publish_state(elapsed=elapsed)
 
     def _should_finish_naturally(self, session):
-        if not session.decoder_eof or session.decoder_failed or session.rebuild_pending:
+        if not session.decoder.eof or session.decoder.failed or session.route.rebuild_pending:
             return False
-        if not session.decoded_queue.empty():
+        if not session.decoder.queue.empty():
             return False
-        if session.scheduled_frames_total == 0:
+        if session.schedule.frames_total == 0:
             return False
 
         tolerance = PCM_BUFFER_FRAMES // 2
-        return session.last_rendered_frames + tolerance >= session.scheduled_frames_total
+        return session.schedule.last_rendered_frames + tolerance >= session.schedule.frames_total
 
     def _should_stop_for_error(self, session):
-        if not session.decoder_failed:
+        if not session.decoder.failed:
             return False
-        if not session.decoded_queue.empty():
+        if not session.decoder.queue.empty():
             return False
-        if session.scheduled_frames_total == 0:
+        if session.schedule.frames_total == 0:
             return True
 
         tolerance = PCM_BUFFER_FRAMES // 2
-        return session.last_rendered_frames + tolerance >= session.scheduled_frames_total
+        return session.schedule.last_rendered_frames + tolerance >= session.schedule.frames_total
 
     @staticmethod
     def _resume_request(
@@ -921,7 +925,7 @@ class AudioEngine:
         retry_attempt=0,
     ):
         if start_time is None:
-            start_time = session.last_elapsed_seconds
+            start_time = session.schedule.last_elapsed_seconds
         return PlayRequest(
             url=session.url,
             duration=session.duration,
@@ -935,27 +939,27 @@ class AudioEngine:
         )
 
     def _restart_local_decoder(self, session, start_time):
-        if session.player is None or session.engine is None:
+        if session.graph.player is None or session.graph.engine is None:
             raise RuntimeError("Local seek requires an active player node")
 
         try:
-            session.player.stop()
+            session.graph.player.stop()
         except Exception as exc:
             log_exception("AVAudioPlayerNode stop failed during seek", exc)
             raise
 
         self._stop_decoder(session, fast=True)
         session.base_offset_seconds = max(0.0, float(start_time))
-        session.last_elapsed_seconds = session.base_offset_seconds
-        session.last_rendered_frames = 0
-        session.decoder_eof = False
-        session.decoder_failed = False
-        session.decoder_error = None
-        session.scheduled_buffers.clear()
-        session.scheduled_frames_total = 0
-        session.started_playback = False
-        session.rebuild_pending = False
-        session.rebuild_deadline = 0.0
+        session.schedule.last_elapsed_seconds = session.base_offset_seconds
+        session.schedule.last_rendered_frames = 0
+        session.decoder.eof = False
+        session.decoder.failed = False
+        session.decoder.error = None
+        session.schedule.buffers.clear()
+        session.schedule.frames_total = 0
+        session.schedule.started_playback = False
+        session.route.rebuild_pending = False
+        session.route.rebuild_deadline = 0.0
         self._publish_state(
             active=True,
             starting=not session.paused,
@@ -965,7 +969,7 @@ class AudioEngine:
             elapsed=session.base_offset_seconds,
             reset_grid=True,
         )
-        session.engine.prepare()
+        session.graph.engine.prepare()
         self._start_decoder_thread(session)
         self._log_seek_trace(
             session,
@@ -974,28 +978,28 @@ class AudioEngine:
         )
 
     def _stop_decoder(self, session, fast=False):
-        if session.decoder_stop_event is not None:
-            session.decoder_stop_event.set()
+        if session.decoder.stop_event is not None:
+            session.decoder.stop_event.set()
 
         cleanup_timeout = 0.1 if fast else 2.0
         self._cleanup_process(
-            session.ffmpeg_process,
+            session.decoder.ffmpeg_process,
             timeout=cleanup_timeout,
             force_kill=fast,
         )
         self._cleanup_process(
-            session.ytdlp_process,
+            session.decoder.ytdlp_process,
             timeout=cleanup_timeout,
             force_kill=fast,
         )
 
-        if session.decoder_thread is not None and session.decoder_thread.is_alive():
-            session.decoder_thread.join(timeout=0.25 if fast else 1.0)
+        if session.decoder.thread is not None and session.decoder.thread.is_alive():
+            session.decoder.thread.join(timeout=0.25 if fast else 1.0)
 
-        session.decoder_thread = None
-        session.decoder_stop_event = None
-        session.ffmpeg_process = None
-        session.ytdlp_process = None
+        session.decoder.thread = None
+        session.decoder.stop_event = None
+        session.decoder.ffmpeg_process = None
+        session.decoder.ytdlp_process = None
 
     def _discard_session(
         self,
@@ -1007,30 +1011,30 @@ class AudioEngine:
     ):
         session.stop_event.set()
 
-        if session.mixer is not None:
+        if session.graph.mixer is not None:
             try:
-                session.mixer.removeTapOnBus_(0)
+                session.graph.mixer.removeTapOnBus_(0)
             except Exception:
                 pass
 
-        if session.notification_observer is not None:
+        if session.graph.notification_observer is not None:
             try:
-                self._notification_center.removeObserver_(session.notification_observer)
+                self._notification_center.removeObserver_(session.graph.notification_observer)
             except Exception:
                 pass
 
-        if session.player is not None:
+        if session.graph.player is not None:
             try:
-                session.player.stop()
+                session.graph.player.stop()
             except Exception:
                 pass
 
-        if session.seek_trace_id != 0:
+        if session.seek_trace.id != 0:
             self._finish_seek_trace(session, "discarded", reason=reason)
 
-        if session.engine is not None:
+        if session.graph.engine is not None:
             try:
-                session.engine.stop()
+                session.graph.engine.stop()
             except Exception:
                 pass
 
@@ -1039,7 +1043,7 @@ class AudioEngine:
         if clear_public_state:
             self._publish_stopped()
         else:
-            self._publish_state(session_id=0, elapsed=session.last_elapsed_seconds)
+            self._publish_state(session_id=0, elapsed=session.schedule.last_elapsed_seconds)
 
         if notify_stopped and session.on_stopped:
             session.on_stopped()

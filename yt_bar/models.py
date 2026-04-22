@@ -1,8 +1,9 @@
 import os
-import queue
+import queue as queue_lib
 import subprocess
 import threading
 from dataclasses import dataclass, field
+from enum import Enum
 
 from .constants import DECODER_QUEUE_BUFFERS
 from .utils import (
@@ -28,43 +29,102 @@ class PlayRequest:
     retry_attempt: int = 0
 
 
+class UICommandKind(Enum):
+    PLAY = "play"
+    STOPPED = "stopped"
+    PAUSE = "pause"
+    TOGGLE = "toggle"
+    SEEK_DELTA = "seek_delta"
+
+
+@dataclass(frozen=True)
+class UICommand:
+    kind: UICommandKind
+    delta_seconds: float = 0.0
+
+    @classmethod
+    def play(cls):
+        return cls(UICommandKind.PLAY)
+
+    @classmethod
+    def stopped(cls):
+        return cls(UICommandKind.STOPPED)
+
+    @classmethod
+    def pause(cls):
+        return cls(UICommandKind.PAUSE)
+
+    @classmethod
+    def toggle(cls):
+        return cls(UICommandKind.TOGGLE)
+
+    @classmethod
+    def seek_delta(cls, delta_seconds):
+        return cls(UICommandKind.SEEK_DELTA, float(delta_seconds))
+
+
 @dataclass
-class PlaybackSession:
-    id: int
-    request: PlayRequest
-    stop_event: threading.Event = field(default_factory=threading.Event)
-    decoder_stop_event: threading.Event | None = None
-    decoded_queue: queue.Queue = field(
-        default_factory=lambda: queue.Queue(maxsize=DECODER_QUEUE_BUFFERS)
-    )
+class PlaybackGraphState:
     engine: object | None = None
     player: object | None = None
     mixer: object | None = None
     format: object | None = None
     notification_observer: object | None = None
     tap_block: object | None = None
-    decoder_thread: threading.Thread | None = None
+
+
+@dataclass
+class PlaybackDecoderState:
+    stop_event: threading.Event | None = None
+    queue: queue_lib.Queue = field(
+        default_factory=lambda: queue_lib.Queue(maxsize=DECODER_QUEUE_BUFFERS)
+    )
+    thread: threading.Thread | None = None
     ytdlp_process: subprocess.Popen | None = None
     ffmpeg_process: subprocess.Popen | None = None
-    decoder_generation: int = 0
-    decoder_eof: bool = False
-    decoder_failed: bool = False
-    decoder_error: str | None = None
-    scheduled_buffers: dict = field(default_factory=dict)
-    scheduled_frames_total: int = 0
+    generation: int = 0
+    eof: bool = False
+    failed: bool = False
+    error: str | None = None
+
+
+@dataclass
+class PlaybackScheduleState:
+    buffers: dict = field(default_factory=dict)
+    frames_total: int = 0
     next_buffer_id: int = 0
     started_playback: bool = False
     last_rendered_frames: int = 0
     last_elapsed_seconds: float = 0.0
+
+
+@dataclass
+class PlaybackRouteState:
     rebuild_pending: bool = False
     rebuild_deadline: float = 0.0
-    seek_trace_id: int = 0
-    seek_trace_started_at: float = 0.0
-    seek_trace_target: float = 0.0
-    seek_trace_first_chunk_logged: bool = False
-    seek_trace_first_buffer_logged: bool = False
-    seek_trace_player_play_logged: bool = False
-    seek_trace_elapsed_logged: bool = False
+
+
+@dataclass
+class SeekTraceState:
+    id: int = 0
+    started_at: float = 0.0
+    target: float = 0.0
+    first_chunk_logged: bool = False
+    first_buffer_logged: bool = False
+    player_play_logged: bool = False
+    elapsed_logged: bool = False
+
+
+@dataclass
+class PlaybackSession:
+    id: int
+    request: PlayRequest
+    stop_event: threading.Event = field(default_factory=threading.Event)
+    graph: PlaybackGraphState = field(default_factory=PlaybackGraphState)
+    decoder: PlaybackDecoderState = field(default_factory=PlaybackDecoderState)
+    schedule: PlaybackScheduleState = field(default_factory=PlaybackScheduleState)
+    route: PlaybackRouteState = field(default_factory=PlaybackRouteState)
+    seek_trace: SeekTraceState = field(default_factory=SeekTraceState)
 
     @property
     def duration(self):

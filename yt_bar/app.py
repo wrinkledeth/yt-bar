@@ -10,7 +10,7 @@ from .audio_engine import AudioEngine
 from .cache import CacheManager
 from .constants import PAUSE_TITLE
 from .menu import MenuController
-from .models import RecentItem, ResolvedItem
+from .models import RecentItem, ResolvedItem, UICommand, UICommandKind
 from .objc_bridges import schedule_common_mode_timer
 from .remote_commands import RemoteCommandController
 from .resolver import resolve_url
@@ -91,9 +91,9 @@ class YTBar(rumps.App):
                 return self._current_index, self._tracks[self._current_index]
         return -1, None
 
-    def _enqueue_ui_action(self, action, *payload):
+    def _enqueue_ui_action(self, command):
         with self._state_lock:
-            self._pending_actions.append((action, *payload))
+            self._pending_actions.append(command)
 
     def _load_settings(self):
         settings = self.settings_store.load()
@@ -266,24 +266,21 @@ class YTBar(rumps.App):
         self._set_progress_display()
         self._clear_now_playing_info()
 
-    def _perform_ui_action(self, action, *payload):
-        if action == "play":
+    def _perform_ui_action(self, command):
+        if command.kind is UICommandKind.PLAY:
             self._play_or_resume_current_track()
             return
-        if action == "stopped":
+        if command.kind is UICommandKind.STOPPED:
             self._handle_stopped_ui()
             return
-        if action == "remote_play":
-            self._play_or_resume_current_track()
-            return
-        if action == "remote_pause":
+        if command.kind is UICommandKind.PAUSE:
             self._pause_current_track()
             return
-        if action == "remote_toggle":
+        if command.kind is UICommandKind.TOGGLE:
             self._toggle_play_pause()
             return
-        if action == "remote_seek_delta":
-            self._seek_current_track_by(payload[0])
+        if command.kind is UICommandKind.SEEK_DELTA:
+            self._seek_current_track_by(command.delta_seconds)
 
     def _update_remote_skip_intervals(self):
         self.remote.update_skip_intervals()
@@ -308,8 +305,8 @@ class YTBar(rumps.App):
         if rebuild_recent:
             self.menu_controller.rebuild_recent_menu()
 
-        for action in pending_actions:
-            self._perform_ui_action(*action)
+        for command in pending_actions:
+            self._perform_ui_action(command)
 
         self.menu_controller.refresh_playback_items()
 
@@ -327,12 +324,12 @@ class YTBar(rumps.App):
         with self._state_lock:
             if self._current_index + 1 < len(self._tracks):
                 self._current_index += 1
-                self._pending_actions.append(("play",))
+                self._pending_actions.append(UICommand.play())
             else:
-                self._pending_actions.append(("stopped",))
+                self._pending_actions.append(UICommand.stopped())
 
     def _on_engine_stopped(self):
-        self._enqueue_ui_action("stopped")
+        self._enqueue_ui_action(UICommand.stopped())
 
     def _play_track(self, index, start_time=0, paused=False):
         with self._state_lock:
@@ -462,7 +459,7 @@ class YTBar(rumps.App):
             self._current_playback_mode = playback_mode
             self._current_item_generation += 1
             generation = self._current_item_generation
-            self._pending_actions.append(("play",))
+            self._pending_actions.append(UICommand.play())
 
         self._record_item_played(item, last_played=last_played)
         if playback_mode == "stream":
@@ -512,7 +509,7 @@ class YTBar(rumps.App):
             item = resolve_url(url)
             if item is None:
                 if not self.engine.is_active:
-                    self._enqueue_ui_action("stopped")
+                    self._enqueue_ui_action(UICommand.stopped())
                 return
 
             playback_mode = "local" if item.is_fully_cached() else "stream"

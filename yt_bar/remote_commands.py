@@ -1,4 +1,5 @@
 from .media_player import load_media_player_support
+from .models import UICommand
 from .objc_bridges import RemoteCommandBridge
 from .utils import log_exception
 
@@ -87,37 +88,37 @@ class RemoteCommandController:
         current_index, track = self._current_track_snapshot()
         if self._engine.is_active:
             if self._engine.is_paused:
-                self._enqueue_ui_action("remote_play")
+                self._enqueue_ui_action(UICommand.play())
             return self._remote_command_status_success()
         if track is None or current_index < 0:
             return self._remote_command_status_no_such_content()
-        self._enqueue_ui_action("remote_play")
+        self._enqueue_ui_action(UICommand.play())
         return self._remote_command_status_success()
 
     def _handle_remote_pause_command(self):
         if not self._engine.is_active:
             return self._remote_command_status_no_such_content()
         if not self._engine.is_paused:
-            self._enqueue_ui_action("remote_pause")
+            self._enqueue_ui_action(UICommand.pause())
         return self._remote_command_status_success()
 
     def _handle_remote_toggle_command(self):
         current_index, track = self._current_track_snapshot()
         if not self._engine.is_active and (track is None or current_index < 0):
             return self._remote_command_status_no_such_content()
-        self._enqueue_ui_action("remote_toggle")
+        self._enqueue_ui_action(UICommand.toggle())
         return self._remote_command_status_success()
 
     def _handle_remote_skip_forward_command(self):
         if not self._engine.is_active or self._engine.duration <= 0:
             return self._remote_command_status_no_such_content()
-        self._enqueue_ui_action("remote_seek_delta", self._skip_interval())
+        self._enqueue_ui_action(UICommand.seek_delta(self._skip_interval()))
         return self._remote_command_status_success()
 
     def _handle_remote_skip_backward_command(self):
         if not self._engine.is_active or self._engine.duration <= 0:
             return self._remote_command_status_no_such_content()
-        self._enqueue_ui_action("remote_seek_delta", -self._skip_interval())
+        self._enqueue_ui_action(UICommand.seek_delta(-self._skip_interval()))
         return self._remote_command_status_success()
 
     def _setup_media_player(self):
