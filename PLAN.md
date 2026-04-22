@@ -2,9 +2,9 @@
 
 ## Current Focus
 
-Phase 1, Phase 2, Phase 3, Phase 4 Step 1, and Phase 4 Step 2 are
-complete. Phase 4 Step 3 is the next active phase; later phases remain backlog
-context.
+Phase 1, Phase 2, Phase 3, Phase 4 Step 1, Phase 4 Step 2, and Phase 4
+Step 3 are complete. The remaining structural refactor is the AudioEngine split;
+later phases remain backlog context.
 
 ## Phase 1: Cleanup - Done
 
@@ -220,9 +220,48 @@ context.
 - Manually test clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance before closing the broader UI/playback refactor.
 - Update `AGENTS.md` and any user-facing docs for the final module ownership layout once the Phase 4 coordinator extraction is complete.
 
+## Phase 4 Step 3: Playback Coordination Extraction - Done
+
+- Commit: `cd22664`
+- Completed:
+  - Added `PlaybackController` in `yt_bar/playback.py` to own current track selection, hidden playlist advancement, playback mode/generation state, and cache-scheduling intent for started items.
+  - Updated `YTBar` to delegate current track snapshots, playlist advancement, local/stream source selection, cache generation checks, and resolver playback-mode decisions to `PlaybackController`.
+  - Preserved `YTBar` ownership of engine calls, menu snapshots, settings, timers, pending UI commands, seek command orchestration, remote/Now Playing synchronization, and app lifecycle.
+  - Added focused playback-controller tests for mode selection, generation/cache gating, local/stream source selection, playlist advancement, and invalid index handling.
+  - Updated `AGENTS.md` for the new `yt_bar/playback.py` and `yt_bar/recent.py` ownership layout, and corrected the stale seek-trace note.
+- Validation passed:
+  - `uv run pytest tests/test_playback.py -q`
+  - `uv run ruff check yt_bar/playback.py yt_bar/app.py tests/test_playback.py`
+  - `uv run ruff format --check yt_bar/playback.py yt_bar/app.py tests/test_playback.py`
+  - `uv run pytest -q`
+  - `uv run ruff check .`
+  - `uv run ruff format --check .`
+  - `.venv/bin/python -m compileall yt_bar.py yt_bar`
+  - Restarted the installed LaunchAgent and verified `launchctl print` reported `state = running`.
+- Manual clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance checks were skipped beyond launch/process verification.
+
+## Phase 4 Step 3 Decisions And Deviations
+
+- `PlaybackController` lives in `yt_bar/playback.py` instead of adding more playback coordination state to `yt_bar.models`.
+- `YTBar` passes its `_state_lock` into `PlaybackController` so current-track, playlist, and pending-action transitions preserve the existing UI-thread handoff boundary.
+- `PlaybackController` returns small immutable coordination results; it does not call `AudioEngine`, mutate menu state, schedule cache jobs directly, or enqueue UI actions.
+- Cache scheduling remains in `YTBar` / `CacheManager`, but the playback controller owns the generation and should-cache intent used by that boundary.
+- No visible playback or menu behavior changes were intended.
+
+## Phase 4 Step 3 Discoveries For Future Phases
+
+- `YTBar` is now mostly an app-boundary coordinator for UI, timers, settings, resolver thread startup, engine calls, cache/recent/controller handoffs, and MediaPlayer synchronization.
+- The new playback boundary gives future app-level tests a pure place to assert playlist advancement and cache-generation behavior without importing AppKit or rumps.
+- The remaining large ownership concentration is `AudioEngine`, which still owns the decoder pipeline, AVFoundation graph, route rebuild handling, and visualizer tap state.
+
+## Phase 4 Step 3 Out-Of-Scope Follow-Ups
+
+- Add app-level tests or fakes around `YTBar` playback/menu action routing if that routing changes again.
+- Manually test clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance before closing the broader playback/UI refactor.
+- Split `AudioEngine` into decoder, AVFoundation session, and stereometer-focused modules while keeping `AudioEngine` as the public facade.
+
 ## Phase 4 Remaining Structural Refactors
 
-- Extract remaining `YTBar` playback coordination responsibilities into a focused module.
 - Split `AudioEngine` last into decoder, AVFoundation session, and stereometer-focused modules while keeping `AudioEngine` as the public facade.
 
 ## Validation
@@ -234,4 +273,4 @@ context.
 
 - `py2app` has no current intended use and should be removed.
 - No user-facing behavior changes are intended except seek tracing becoming opt-in.
-- Update `AGENTS.md` only after the final module layout is settled.
+- Keep `AGENTS.md` current when module ownership changes; update README only when user-facing behavior or developer commands change.
