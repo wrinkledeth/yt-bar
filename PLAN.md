@@ -3,9 +3,9 @@
 ## Current Focus
 
 Phase 1, Phase 2, Phase 3, Phase 4 Step 1, Phase 4 Step 2, Phase 4
-Step 3, Phase 4 Step 4, and Phase 4 Step 5 are complete. The remaining
-structural refactor work is the stereometer-focused end of the AudioEngine
-split; later phases remain backlog context.
+Step 3, Phase 4 Step 4, Phase 4 Step 5, and Phase 4 Step 6 are complete.
+The structural refactor work is complete; remaining testing and manual
+verification follow-ups stay as backlog context.
 
 ## Phase 1: Cleanup - Done
 
@@ -342,9 +342,47 @@ split; later phases remain backlog context.
 - Add audio-engine boundary tests for route rebuild, local seek restart, and decoder-failure stop behavior once the final visualizer extraction settles.
 - Manually test clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance before closing the broader playback/UI refactor.
 
+## Phase 4 Step 6: Stereometer/Visualizer Extraction - Done
+
+- Commit: `01cdaf0`
+- Completed:
+  - Expanded `yt_bar/visualizer.py` with `StereometerController` to own current-session snapshot filtering, pending stereo snapshot storage, dot-grid state, peak normalization, and stereometer computation.
+  - Updated `AudioEngine` to keep the public playback facade, worker loop, route rebuild handling, local seek orchestration, elapsed publication, and playback state while delegating visualizer state and dot-grid reads.
+  - Added focused visualizer-controller tests for current-session filtering, snapshot rechecks, reset behavior, and dot-grid copy semantics.
+  - Updated `AGENTS.md` for the new `yt_bar/visualizer.py` ownership layout.
+- Validation passed:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_visualizer.py tests/test_formatting.py -q`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check yt_bar/visualizer.py yt_bar/audio_engine.py tests/test_visualizer.py tests/test_formatting.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check yt_bar/visualizer.py yt_bar/audio_engine.py tests/test_visualizer.py tests/test_formatting.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check .`
+  - `.venv/bin/python -m compileall yt_bar.py yt_bar`
+  - Restarted the installed LaunchAgent and verified `launchctl print` reported `state = running`; process-list verification showed `.venv/bin/python yt_bar.py`.
+- Manual clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance checks remain pending beyond launch/process verification.
+
+## Phase 4 Step 6 Decisions And Deviations
+
+- The extraction stayed inside `yt_bar/visualizer.py` rather than creating a new module, so the existing braille helper and the new stereometer controller live together.
+- `StereometerController` receives a callback that reads the current session id so it can recheck session ownership after copying tap-buffer data without taking ownership of `AudioEngine` state.
+- `AudioEngine.dot_grid` remains the public read path used by the app title updater; no app-facing API was changed.
+- No visible playback or menu behavior changes were intended.
+
+## Phase 4 Step 6 Discoveries For Future Phases
+
+- The remaining `AudioEngine` responsibilities are now mostly playback/session orchestration rather than subsystem state ownership.
+- Visualizer state can now be tested with simple fake buffers and without importing `AudioEngine`, `AVFoundation`, or `rumps`.
+- The next high-value automation work is boundary testing around route rebuilds, local seek restart, decoder failure, and other behavior that still sits in `AudioEngine`.
+
+## Phase 4 Step 6 Out-Of-Scope Follow-Ups
+
+- Add decoder pipeline tests with fake `Popen`/stdout coverage for EOF, error reporting, PCM queueing, and stop/fast-cleanup behavior.
+- Add audio-engine boundary tests for route rebuild, local seek restart, and decoder-failure stop behavior now that the subsystem state extractions are complete.
+- Manually test clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance before treating the broader playback/UI refactor as closed.
+
 ## Phase 4 Remaining Structural Refactors
 
-- Continue the `AudioEngine` split by extracting the stereometer-focused module while keeping `AudioEngine` as the public facade.
+- Structural refactor work is complete. Keep `AudioEngine` as the public facade unless a later feature or bug fix creates a new boundary worth extracting.
 
 ## Next Testing Follow-Up
 
