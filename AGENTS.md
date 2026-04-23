@@ -7,7 +7,8 @@
 ## Project Structure & Entry Points
 - `yt_bar.py` is the LaunchAgent-compatible entry shim; keep it present because `install.sh` points at it.
 - `yt_bar/app.py` contains `YTBar(rumps.App)` and `main()`.
-- `yt_bar/audio_engine.py` contains the playback engine facade and AVFoundation scheduling flow.
+- `yt_bar/audio_engine.py` contains the playback engine facade, worker loop, route/seek orchestration, and visualizer coordination.
+- `yt_bar/av_session.py` owns the AVFoundation graph/session lifecycle used by `AudioEngine`.
 - `yt_bar/decoder.py` contains the `yt-dlp` / `ffmpeg` decoder subprocess pipeline.
 - `yt_bar/playback.py` owns current track, playlist advancement, playback mode/generation, and cache-trigger coordination state.
 - `yt_bar/recent.py` owns recent-index state, menu-ready recent entries, stale pruning, and recent-to-playable-item conversion.
@@ -62,9 +63,16 @@
   - the public playback facade for `yt-dlp/ffmpeg or local-file/ffmpeg -> AVAudioEngine`
   - playback state
   - a single serial playback worker
-  - elapsed time tracking from `AVAudioPlayerNode` timing
-  - CoreAudio default-output and `AVAudioEngineConfigurationChangeNotification` handling
+  - elapsed time publication from `AVAudioPlayerNode` timing
+  - CoreAudio default-output handling and route rebuild orchestration
+  - local seek orchestration
   - stereometer dot-grid computation from a mixer tap snapshot
+- `AVAudioGraphController` (`yt_bar/av_session.py`) owns:
+  - `AVAudioEngine` / `AVAudioPlayerNode` / mixer / format lifecycle
+  - `AVAudioEngineConfigurationChangeNotification` observer registration/removal
+  - mixer tap installation/removal for visualizer snapshots
+  - PCM buffer construction and `AVAudioPlayerNode` buffer scheduling
+  - player play / pause / stop / prepare calls and rendered-frame timing reads
 - `DecoderPipeline` (`yt_bar/decoder.py`) owns:
   - decoder thread startup/shutdown
   - `yt-dlp` / `ffmpeg` subprocess construction and cleanup
@@ -95,7 +103,7 @@
 - Treat AppKit and `rumps` UI state as main-thread-only.
 - Background work currently includes:
   - URL resolution (`yt_bar/resolver.py`)
-  - decoder subprocess I/O (`yt_bar/audio_engine.py`)
+  - decoder subprocess I/O (`yt_bar/decoder.py`)
   - the serial playback worker
   - cache worker downloads (`yt_bar/cache.py`)
 - Use the existing `_pending_actions` queue handoff pattern for UI mutations triggered by worker threads or MediaPlayer remote-command callbacks.

@@ -2,12 +2,10 @@ import queue
 import threading
 import time
 
-import AVFoundation
-import Foundation
 import numpy as np
 
+from .av_session import AVAudioGraphController
 from .constants import (
-    CHANNELS,
     GRID_H,
     GRID_W,
     INTERNAL_SAMPLE_RATE,
@@ -17,13 +15,11 @@ from .constants import (
     SCHEDULE_AHEAD_FRAMES,
     SEEK_TRACE_LOGGING,
     VISUALIZER_SNAPSHOT_FRAMES,
-    VISUALIZER_TAP_BUFFER_FRAMES,
     WORKER_TICK_SECONDS,
 )
 from .core_audio import install_default_output_listener, uninstall_default_output_listener
 from .decoder import DecoderPipeline
 from .models import PlaybackSession, PlayRequest
-from .objc_bridges import EngineConfigurationObserver
 from .utils import log_exception
 
 
@@ -31,7 +27,6 @@ class AudioEngine:
     def __init__(self):
         self._lock = threading.RLock()
         self._commands = queue.Queue()
-        self._notification_center = Foundation.NSNotificationCenter.defaultCenter()
         self._session_counter = 0
         self._current_session_id = 0
         self._active = False
@@ -46,6 +41,7 @@ class AudioEngine:
         self._viz_snapshot = None
         self._output_listener = None
         self._seek_trace_counter = 0
+        self._graph = AVAudioGraphController()
         self._decoder = DecoderPipeline(self._enqueue_command, self._log_seek_trace)
         self._pending_retry_request = None
         self._pending_retry_at = 0.0
@@ -491,56 +487,18 @@ class AudioEngine:
         session.seek_trace.elapsed_logged = False
 
     def _build_engine(self, session):
-        engine = AVFoundation.AVAudioEngine.alloc().init()
-        player = AVFoundation.AVAudioPlayerNode.alloc().init()
-        audio_format = (
-            AVFoundation.AVAudioFormat.alloc().initStandardFormatWithSampleRate_channels_(
-                float(INTERNAL_SAMPLE_RATE),
-                CHANNELS,
-            )
+        self._graph.start(
+            session,
+            on_route_event=lambda sid=session.id: self._enqueue_command(
+                "route_event",
+                "engine_config",
+                sid,
+            ),
+            on_visualizer_buffer=lambda buffer, sid=session.id: self._capture_visualizer_snapshot(
+                sid,
+                buffer,
+            ),
         )
-
-        engine.attachNode_(player)
-        mixer = engine.mainMixerNode()
-        engine.connect_to_format_(player, mixer, audio_format)
-        engine.outputNode()
-
-        session.graph.engine = engine
-        session.graph.player = player
-        session.graph.mixer = mixer
-        session.graph.format = audio_format
-
-        self._register_engine_observer(session)
-        self._install_visualizer_tap(session)
-
-        engine.prepare()
-        engine.startAndReturnError_(None)
-
-    def _register_engine_observer(self, session):
-        observer = EngineConfigurationObserver.alloc().initWithCallback_(
-            lambda sid=session.id: self._enqueue_command("route_event", "engine_config", sid)
-        )
-        self._notification_center.addObserver_selector_name_object_(
-            observer,
-            "handleConfigChange:",
-            AVFoundation.AVAudioEngineConfigurationChangeNotification,
-            session.graph.engine,
-        )
-        session.graph.notification_observer = observer
-
-    def _install_visualizer_tap(self, session):
-        tap_format = session.graph.mixer.outputFormatForBus_(0)
-
-        def tap_block(buffer, when, sid=session.id):
-            self._capture_visualizer_snapshot(sid, buffer)
-
-        session.graph.mixer.installTapOnBus_bufferSize_format_block_(
-            0,
-            VISUALIZER_TAP_BUFFER_FRAMES,
-            tap_format,
-            tap_block,
-        )
-        session.graph.tap_block = tap_block
 
     def _start_decoder_thread(self, session):
         self._decoder.start(session)
@@ -571,7 +529,7 @@ class AudioEngine:
             and not session.schedule.started_playback
         ):
             try:
-                session.graph.player.play()
+                self._graph.play(session)
                 session.schedule.started_playback = True
                 if session.seek_trace.id != 0 and not session.seek_trace.player_play_logged:
                     session.seek_trace.player_play_logged = True
@@ -639,11 +597,8 @@ class AudioEngine:
             if chunk is None or len(chunk) == 0:
                 continue
 
-            buffer = self._make_pcm_buffer(session.graph.format, chunk)
             buffer_id = session.schedule.next_buffer_id
             session.schedule.next_buffer_id += 1
-            session.schedule.buffers[buffer_id] = buffer
-            session.schedule.frames_total += len(chunk)
 
             def completion_handler(
                 callback_type,
@@ -658,11 +613,9 @@ class AudioEngine:
                 )
 
             try:
-                session.graph.player.scheduleBuffer_completionCallbackType_completionHandler_(
-                    buffer,
-                    AVFoundation.AVAudioPlayerNodeCompletionDataPlayedBack,
-                    completion_handler,
-                )
+                buffer = self._graph.schedule_chunk(session, chunk, completion_handler)
+                session.schedule.buffers[buffer_id] = buffer
+                session.schedule.frames_total += len(chunk)
                 if session.seek_trace.id != 0 and not session.seek_trace.first_buffer_logged:
                     session.seek_trace.first_buffer_logged = True
                     scheduled_ahead_frames = int(self._scheduled_ahead_frames(session))
@@ -690,7 +643,7 @@ class AudioEngine:
 
         if paused:
             try:
-                session.graph.player.pause()
+                self._graph.pause(session)
             except Exception as exc:
                 log_exception("AVAudioPlayerNode pause failed", exc)
             self._publish_state(active=True, starting=False, paused=True)
@@ -703,7 +656,7 @@ class AudioEngine:
         )
         if session.schedule.started_playback and self._scheduled_ahead_frames(session) > 0:
             try:
-                session.graph.player.play()
+                self._graph.play(session)
                 self._publish_state(active=True, starting=False, paused=False)
             except Exception as exc:
                 log_exception("AVAudioPlayerNode resume failed", exc)
@@ -716,19 +669,13 @@ class AudioEngine:
     def _refresh_elapsed(self, session):
         elapsed = session.schedule.last_elapsed_seconds
 
-        if session.graph.player is not None and session.schedule.started_playback:
+        if session.schedule.started_playback:
             try:
-                render_time = session.graph.player.lastRenderTime()
-                if render_time is not None:
-                    player_time = session.graph.player.playerTimeForNodeTime_(render_time)
-                else:
-                    player_time = None
-
-                if player_time is not None and player_time.isSampleTimeValid():
-                    sample_time = max(0, int(player_time.sampleTime()))
+                rendered_frames = self._graph.rendered_frames(session)
+                if rendered_frames is not None:
                     session.schedule.last_rendered_frames = max(
                         session.schedule.last_rendered_frames,
-                        sample_time,
+                        rendered_frames,
                     )
                     elapsed = session.base_offset_seconds + (
                         session.schedule.last_rendered_frames / INTERNAL_SAMPLE_RATE
@@ -807,7 +754,7 @@ class AudioEngine:
             raise RuntimeError("Local seek requires an active player node")
 
         try:
-            session.graph.player.stop()
+            self._graph.stop_player(session)
         except Exception as exc:
             log_exception("AVAudioPlayerNode stop failed during seek", exc)
             raise
@@ -833,7 +780,7 @@ class AudioEngine:
             elapsed=session.base_offset_seconds,
             reset_grid=True,
         )
-        session.graph.engine.prepare()
+        self._graph.prepare(session)
         self._start_decoder_thread(session)
         self._log_seek_trace(
             session,
@@ -854,32 +801,10 @@ class AudioEngine:
     ):
         session.stop_event.set()
 
-        if session.graph.mixer is not None:
-            try:
-                session.graph.mixer.removeTapOnBus_(0)
-            except Exception:
-                pass
-
-        if session.graph.notification_observer is not None:
-            try:
-                self._notification_center.removeObserver_(session.graph.notification_observer)
-            except Exception:
-                pass
-
-        if session.graph.player is not None:
-            try:
-                session.graph.player.stop()
-            except Exception:
-                pass
-
         if session.seek_trace.id != 0:
             self._finish_seek_trace(session, "discarded", reason=reason)
 
-        if session.graph.engine is not None:
-            try:
-                session.graph.engine.stop()
-            except Exception:
-                pass
+        self._graph.discard(session)
 
         self._stop_decoder(session)
 
@@ -892,32 +817,6 @@ class AudioEngine:
             session.on_stopped()
 
         print("Session discarded", {"reason": reason, "session_id": session.id})
-
-    @staticmethod
-    def _make_pcm_buffer(audio_format, interleaved_chunk):
-        frame_count = int(len(interleaved_chunk))
-        buffer = AVFoundation.AVAudioPCMBuffer.alloc().initWithPCMFormat_frameCapacity_(
-            audio_format,
-            frame_count,
-        )
-        left = np.ascontiguousarray(interleaved_chunk[:, 0], dtype=np.float32)
-        right = np.ascontiguousarray(interleaved_chunk[:, 1], dtype=np.float32)
-
-        channel_data = buffer.floatChannelData()
-        left_dest = np.frombuffer(
-            channel_data[0].as_buffer(frame_count),
-            dtype=np.float32,
-            count=frame_count,
-        )
-        right_dest = np.frombuffer(
-            channel_data[1].as_buffer(frame_count),
-            dtype=np.float32,
-            count=frame_count,
-        )
-        left_dest[:] = left
-        right_dest[:] = right
-        buffer.setFrameLength_(frame_count)
-        return buffer
 
     def _capture_visualizer_snapshot(self, session_id, buffer):
         with self._lock:
