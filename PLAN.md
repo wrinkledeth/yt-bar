@@ -3,8 +3,9 @@
 ## Current Focus
 
 Phase 1, Phase 2, Phase 3, Phase 4 Step 1, Phase 4 Step 2, Phase 4
-Step 3, and Phase 4 Step 4 are complete. The remaining structural refactor
-work is the rest of the AudioEngine split; later phases remain backlog context.
+Step 3, Phase 4 Step 4, and Phase 4 Step 5 are complete. The remaining
+structural refactor work is the stereometer-focused end of the AudioEngine
+split; later phases remain backlog context.
 
 ## Phase 1: Cleanup - Done
 
@@ -302,9 +303,54 @@ work is the rest of the AudioEngine split; later phases remain backlog context.
 - Add decoder pipeline tests with fake `Popen`/stdout coverage for EOF, error reporting, PCM queueing, and stop/fast-cleanup behavior.
 - Manually test clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance before closing the broader playback/UI refactor.
 
+## Phase 4 Step 5: AVFoundation Graph/Session Extraction - Done
+
+- Commit: `819e606`
+- Completed:
+  - Added `AVAudioGraphController` in `yt_bar/av_session.py` to own `AVAudioEngine` / `AVAudioPlayerNode` graph lifecycle, engine-configuration observer registration, visualizer tap installation, PCM buffer construction/scheduling, and rendered-frame timing queries.
+  - Updated `AudioEngine` to keep the public playback facade, worker loop, route rebuild handling, local seek orchestration, elapsed publication, and visualizer state while delegating graph/session operations.
+  - Added focused AVFoundation graph-controller tests with fake AVFoundation and notification-center coverage.
+  - Updated `AGENTS.md` for the new `yt_bar/av_session.py` ownership layout.
+- Validation passed:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_av_session.py -q`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check yt_bar/av_session.py yt_bar/audio_engine.py tests/test_av_session.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check yt_bar/av_session.py yt_bar/audio_engine.py tests/test_av_session.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check .`
+  - `.venv/bin/python -m compileall yt_bar.py yt_bar`
+  - Restarted the installed LaunchAgent and verified `launchctl print` reported `state = running`; process-list verification showed `.venv/bin/python yt_bar.py`.
+- Manual clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance checks remain pending beyond launch/process verification.
+
+## Phase 4 Step 5 Decisions And Deviations
+
+- The extraction stopped at AVFoundation graph/session ownership; stereometer math and tap-snapshot interpretation remain in `AudioEngine`.
+- `AVAudioGraphController` receives callbacks for route events and visualizer buffers instead of importing or owning the `AudioEngine` facade.
+- `PlaybackGraphState` remains in `yt_bar.models` because the active session object is still shared by the facade and graph controller.
+- No visible playback or menu behavior changes were intended.
+
+## Phase 4 Step 5 Discoveries For Future Phases
+
+- PCM buffer construction, buffer scheduling, observer registration, and rendered-frame timing are now isolated behind a fakeable boundary without importing the `AudioEngine` worker loop.
+- `AudioEngine`'s remaining concentrated responsibility is stereometer/visualizer state plus the surrounding playback-session orchestration.
+- The final AudioEngine split can move visualizer snapshot capture and stereometer math without reopening the decoder or AVFoundation command-builder extractions.
+
+## Phase 4 Step 5 Out-Of-Scope Follow-Ups
+
+- Extract stereometer/visualizer tap snapshot state from `AudioEngine`.
+- Add decoder pipeline tests with fake `Popen`/stdout coverage for EOF, error reporting, PCM queueing, and stop/fast-cleanup behavior.
+- Add audio-engine boundary tests for route rebuild, local seek restart, and decoder-failure stop behavior once the final visualizer extraction settles.
+- Manually test clipboard playback, pause/resume, seek, recents replay/removal, compact menu, media keys, title states, and playlist auto-advance before closing the broader playback/UI refactor.
+
 ## Phase 4 Remaining Structural Refactors
 
-- Continue the `AudioEngine` split by extracting AVFoundation session and stereometer-focused modules while keeping `AudioEngine` as the public facade.
+- Continue the `AudioEngine` split by extracting the stereometer-focused module while keeping `AudioEngine` as the public facade.
+
+## Next Testing Follow-Up
+
+- Add automated boundary tests for behavior currently called out as manual-only where feasible:
+  menu rendering/action dispatch with `rumps`/AppKit fakes, clipboard intake routing with fake clipboard and resolver, MediaPlayer remote-command handlers with fake engine/command-center objects, and Now Playing payload updates with a fake info center.
+- Keep real macOS event delivery manual/integration-only: actual menu bar opening/clicking, global media-key delivery from Control Center, real pasteboard behavior, AVAudioEngine output, device handoff, external `yt-dlp`/`ffmpeg`, and live YouTube URLs.
 
 ## Validation
 
