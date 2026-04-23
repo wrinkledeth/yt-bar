@@ -67,6 +67,8 @@ uv run ruff check yt_bar/app.py
 uv run ruff format --check yt_bar/app.py
 ```
 
+Automated tests cover fake-backed menu rendering/action dispatch, clipboard intake routing, MediaPlayer remote commands, and Now Playing payload updates. Real menu-bar interaction, media-key delivery, pasteboard behavior, native audio output/device handoff, external `yt-dlp` / `ffmpeg`, and live YouTube URLs remain manual or integration testing.
+
 ## Usage
 
 Core:

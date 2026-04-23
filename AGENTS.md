@@ -176,6 +176,18 @@
 
 ## Validation Expectations
 - The automated suite currently starts with an import smoke test in `tests/test_smoke.py`.
+- Automated boundary tests cover fake-backed:
+  - menu rendering and menu-action dispatch
+  - clipboard intake routing and resolver handoff
+  - MediaPlayer remote-command handlers
+  - Now Playing payload updates
+- Keep these paths manual/integration-only:
+  - actual menu bar opening/clicking
+  - global media-key delivery from Control Center
+  - real pasteboard behavior
+  - AVAudioEngine output and device handoff
+  - external `yt-dlp` / `ffmpeg`
+  - live YouTube URLs
 - For Python changes, run the relevant focused pytest/Ruff checks first.
 - Before handoff after broad code changes, run:
   - `uv run pytest -q`
