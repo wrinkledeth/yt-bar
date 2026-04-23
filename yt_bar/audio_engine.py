@@ -2,25 +2,21 @@ import queue
 import threading
 import time
 
-import numpy as np
-
 from .av_session import AVAudioGraphController
 from .constants import (
-    GRID_H,
-    GRID_W,
     INTERNAL_SAMPLE_RATE,
     PCM_BUFFER_FRAMES,
     ROUTE_CHANGE_DEBOUNCE_SECONDS,
     ROUTE_RETRY_DELAYS,
     SCHEDULE_AHEAD_FRAMES,
     SEEK_TRACE_LOGGING,
-    VISUALIZER_SNAPSHOT_FRAMES,
     WORKER_TICK_SECONDS,
 )
 from .core_audio import install_default_output_listener, uninstall_default_output_listener
 from .decoder import DecoderPipeline
 from .models import PlaybackSession, PlayRequest
 from .utils import log_exception
+from .visualizer import StereometerController
 
 
 class AudioEngine:
@@ -35,13 +31,10 @@ class AudioEngine:
         self._current_is_local = False
         self._duration = 0.0
         self._elapsed_seconds = 0.0
-        self._dot_grid = np.zeros((GRID_W, GRID_H), dtype=np.float32)
-        self._dot_decay = 0.75
-        self._rms_peak = 0.001
-        self._viz_snapshot = None
         self._output_listener = None
         self._seek_trace_counter = 0
         self._graph = AVAudioGraphController()
+        self._visualizer = StereometerController()
         self._decoder = DecoderPipeline(self._enqueue_command, self._log_seek_trace)
         self._pending_retry_request = None
         self._pending_retry_at = 0.0
@@ -78,11 +71,7 @@ class AudioEngine:
 
     @property
     def dot_grid(self):
-        with self._lock:
-            if self._viz_snapshot is not None:
-                self._compute_stereometer(self._viz_snapshot)
-                self._viz_snapshot = None
-            return self._dot_grid.copy()
+        return self._visualizer.dot_grid()
 
     def play(
         self,
@@ -189,9 +178,7 @@ class AudioEngine:
             if elapsed is not None:
                 self._elapsed_seconds = max(0.0, float(elapsed))
             if reset_grid:
-                self._dot_grid = np.zeros((GRID_W, GRID_H), dtype=np.float32)
-                self._rms_peak = 0.001
-                self._viz_snapshot = None
+                self._visualizer.reset()
 
     def _publish_stopped(self):
         self._publish_state(
@@ -819,65 +806,15 @@ class AudioEngine:
         print("Session discarded", {"reason": reason, "session_id": session.id})
 
     def _capture_visualizer_snapshot(self, session_id, buffer):
+        self._visualizer.capture_buffer(
+            session_id=session_id,
+            current_session_id=self._current_session_id_snapshot,
+            buffer=buffer,
+        )
+
+    def _current_session_id_snapshot(self):
         with self._lock:
-            if session_id != self._current_session_id:
-                return
-
-        try:
-            frame_length = min(int(buffer.frameLength()), VISUALIZER_SNAPSHOT_FRAMES)
-            if frame_length <= 0:
-                return
-
-            channel_data = buffer.floatChannelData()
-            left = np.frombuffer(
-                channel_data[0].as_buffer(frame_length),
-                dtype=np.float32,
-                count=frame_length,
-            ).copy()
-            right = np.frombuffer(
-                channel_data[1].as_buffer(frame_length),
-                dtype=np.float32,
-                count=frame_length,
-            ).copy()
-            stereo = np.column_stack((left, right))
-
-            with self._lock:
-                if session_id == self._current_session_id:
-                    self._viz_snapshot = stereo
-        except Exception:
-            pass
-
-    def _compute_stereometer(self, stereo):
-        left = stereo[:, 0]
-        right = stereo[:, 1]
-
-        mid = (left + right) * 0.5
-        side = (left - right) * 0.5
-
-        rms = float(np.sqrt(np.mean(mid**2 + side**2)))
-        if rms > self._rms_peak:
-            self._rms_peak = rms
-        else:
-            self._rms_peak *= 0.999
-        self._rms_peak = max(self._rms_peak, 0.001)
-        scale = 0.9 / self._rms_peak
-
-        mid_scaled = mid * scale
-        side_scaled = side * scale
-        self._dot_grid *= self._dot_decay
-
-        energy = mid**2 + side**2
-        step = max(1, len(mid) // 80)
-        indices = np.argsort(energy)[::-1][: len(mid) // step]
-
-        for idx in indices:
-            m = float(np.clip(mid_scaled[idx], -1, 1))
-            s = float(np.clip(side_scaled[idx], -1, 1))
-            x = int((s + 1.0) * 0.5 * (GRID_W - 1) + 0.5)
-            y = int((m + 1.0) * 0.5 * (GRID_H - 1) + 0.5)
-            x = max(0, min(GRID_W - 1, x))
-            y = max(0, min(GRID_H - 1, y))
-            self._dot_grid[x, y] = min(1.0, self._dot_grid[x, y] + 0.15)
+            return self._current_session_id
 
     def _install_default_output_listener(self):
         self._output_listener = install_default_output_listener(

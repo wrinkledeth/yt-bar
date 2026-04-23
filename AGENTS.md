@@ -7,13 +7,14 @@
 ## Project Structure & Entry Points
 - `yt_bar.py` is the LaunchAgent-compatible entry shim; keep it present because `install.sh` points at it.
 - `yt_bar/app.py` contains `YTBar(rumps.App)` and `main()`.
-- `yt_bar/audio_engine.py` contains the playback engine facade, worker loop, route/seek orchestration, and visualizer coordination.
+- `yt_bar/audio_engine.py` contains the playback engine facade, worker loop, and route/seek orchestration.
 - `yt_bar/av_session.py` owns the AVFoundation graph/session lifecycle used by `AudioEngine`.
 - `yt_bar/decoder.py` contains the `yt-dlp` / `ffmpeg` decoder subprocess pipeline.
 - `yt_bar/playback.py` owns current track, playlist advancement, playback mode/generation, and cache-trigger coordination state.
 - `yt_bar/recent.py` owns recent-index state, menu-ready recent entries, stale pruning, and recent-to-playable-item conversion.
+- `yt_bar/visualizer.py` owns stereometer snapshot handling, dot-grid state, and braille rendering helpers.
 - `yt_bar/menu.py`, `yt_bar/cache.py`, `yt_bar/remote_commands.py`, `yt_bar/storage.py`, and `yt_bar/resolver.py` own the corresponding app subsystems.
-- `yt_bar/constants.py`, `yt_bar/models.py`, `yt_bar/utils.py`, `yt_bar/objc_bridges.py`, `yt_bar/core_audio.py`, `yt_bar/media_player.py`, and `yt_bar/visualizer.py` provide shared helpers and platform bridges.
+- `yt_bar/constants.py`, `yt_bar/models.py`, `yt_bar/utils.py`, `yt_bar/objc_bridges.py`, `yt_bar/core_audio.py`, and `yt_bar/media_player.py` provide shared helpers and platform bridges.
 - `CLAUDE.md` should stay a relative symlink to `AGENTS.md`.
 - `todo.md` tracks the current short-list of requested changes.
 
@@ -66,7 +67,6 @@
   - elapsed time publication from `AVAudioPlayerNode` timing
   - CoreAudio default-output handling and route rebuild orchestration
   - local seek orchestration
-  - stereometer dot-grid computation from a mixer tap snapshot
 - `AVAudioGraphController` (`yt_bar/av_session.py`) owns:
   - `AVAudioEngine` / `AVAudioPlayerNode` / mixer / format lifecycle
   - `AVAudioEngineConfigurationChangeNotification` observer registration/removal
@@ -77,6 +77,13 @@
   - decoder thread startup/shutdown
   - `yt-dlp` / `ffmpeg` subprocess construction and cleanup
   - decoded PCM chunk queueing for `AudioEngine`
+- `StereometerController` (`yt_bar/visualizer.py`) owns:
+  - current-session filtering for mixer-tap snapshots
+  - pending stereo snapshot storage
+  - stereometer dot-grid state, decay, and peak normalization
+  - stereometer dot-grid computation from stereo snapshots
+- `grid_to_braille` (`yt_bar/visualizer.py`) owns:
+  - braille title rendering from the stereometer dot grid
 - `YTBar` (`yt_bar/app.py`) owns:
   - the `rumps` menu bar app
   - clipboard URL intake
