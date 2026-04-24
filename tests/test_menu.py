@@ -151,6 +151,15 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
     assert controller.show_songs_item.state == 1
     assert controller.skip_items[60.0].state == 1
     assert controller.recent_size_items[10].state == 1
+    assert list(controller.settings_menu.children) == [
+        "Show Play / Pause",
+        "Show Seek",
+        "Show Songs",
+        "settings_separator",
+        "Skip Interval",
+        "Recent List Size",
+    ]
+    assert controller.settings_menu.children["settings_separator"] is None
     assert controller.recent_menu._menu.delegate is controller._recent_menu_observer
     assert controller.recent_menu.children["recent_rename_0"].title == "Rename…"
     assert controller.recent_menu.children["recent_rename_0"]._menuitem.alternate is True

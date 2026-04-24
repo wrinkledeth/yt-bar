@@ -83,6 +83,7 @@ class MenuController:
         self.settings_menu["Show Play / Pause"] = self.show_play_pause_item
         self.settings_menu["Show Seek"] = self.show_seek_item
         self.settings_menu["Show Songs"] = self.show_songs_item
+        self.settings_menu["settings_separator"] = None
         self.settings_menu["Skip Interval"] = self.skip_menu
         self.settings_menu["Recent List Size"] = self.recent_size_menu
         self.paste_item = rumps.MenuItem(
