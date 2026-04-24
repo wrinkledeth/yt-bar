@@ -66,6 +66,24 @@ def test_playback_mode_for_item_uses_local_only_when_fully_cached(tmp_path):
     )
 
 
+def test_current_playlist_tracks_only_exposes_multi_track_playlists(tmp_path):
+    first = make_track("first", tmp_path / "first.opus")
+    second = make_track("second", tmp_path / "second.opus")
+    playback = PlaybackController()
+
+    playback.start_item(make_item(first, second), playback_mode=STREAM_PLAYBACK_MODE)
+    assert playback.current_playlist_tracks() == (first, second)
+
+    playback.start_item(make_item(first, kind="playlist"), playback_mode=STREAM_PLAYBACK_MODE)
+    assert playback.current_playlist_tracks() == ()
+
+    playback.start_item(
+        make_item(first, second, kind="video"),
+        playback_mode=STREAM_PLAYBACK_MODE,
+    )
+    assert playback.current_playlist_tracks() == ()
+
+
 def test_select_track_returns_stream_or_local_playback_source(tmp_path):
     local_path = tmp_path / "track.opus"
     track = make_track("track", local_path)

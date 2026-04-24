@@ -18,6 +18,8 @@ class MenuController:
         self._recent_menu_observer = None
         self._last_compact_menu = None
         self._last_recent_entries = None
+        self._last_song_picker_enabled = None
+        self._last_song_picker_entries = None
         self._last_now_playing = None
         self._last_progress_text = None
         self._last_seek_segment = None
@@ -41,6 +43,7 @@ class MenuController:
 
         self._playpause_callback = lambda _: self._dispatch(MenuAction.play_pause())
         self.playpause_item = rumps.MenuItem("Play / Pause", callback=self._playpause_callback)
+        self.song_picker_menu = rumps.MenuItem("Songs")
         self.recent_menu = rumps.MenuItem("Recent")
         self.settings_menu = rumps.MenuItem("Settings")
         self.compact_menu_item = rumps.MenuItem(
@@ -98,6 +101,7 @@ class MenuController:
         self.apply_layout(snapshot)
         self.apply_settings_check_marks(snapshot)
         self.refresh_playback_items(snapshot)
+        self.rebuild_song_picker_menu(snapshot)
         self.rebuild_recent_menu(snapshot)
         self.set_now_playing(snapshot)
         self.set_progress_display(snapshot)
@@ -119,6 +123,7 @@ class MenuController:
                 [
                     self.playpause_item,
                     self.seek_menu,
+                    self.song_picker_menu,
                     None,
                 ]
             )
@@ -149,6 +154,9 @@ class MenuController:
         seek_enabled = snapshot.active and (snapshot.progress_duration or 0) > 0
         if self.seek_menu._menuitem.isEnabled() != seek_enabled:
             self.set_menu_item_enabled(self.seek_menu, seek_enabled)
+
+        if self.song_picker_menu._menuitem.isEnabled() != snapshot.song_picker_enabled:
+            self.set_menu_item_enabled(self.song_picker_menu, snapshot.song_picker_enabled)
 
     def install_recent_menu_delegate(self):
         if self.recent_menu._menu is None:
@@ -224,6 +232,34 @@ class MenuController:
 
         self.install_recent_menu_delegate()
         self._last_recent_entries = entries
+
+    def rebuild_song_picker_menu(self, snapshot: MenuSnapshot):
+        entries = snapshot.song_picker_entries
+        enabled = snapshot.song_picker_enabled
+        if self._last_song_picker_entries == entries and self._last_song_picker_enabled == enabled:
+            return
+        if self.song_picker_menu._menu is not None:
+            self.song_picker_menu.clear()
+
+        if not entries:
+            placeholder = rumps.MenuItem("No songs available")
+            placeholder.set_callback(None)
+            self.song_picker_menu["song_picker_empty"] = placeholder
+            self._last_song_picker_entries = entries
+            self._last_song_picker_enabled = enabled
+            return
+
+        for entry in entries:
+            track_item = rumps.MenuItem(
+                truncate_title(entry.title),
+                callback=lambda _, index=entry.index: self._dispatch(
+                    MenuAction.play_current_playlist_track(index)
+                ),
+            )
+            self.song_picker_menu[f"song_picker_{entry.index}"] = track_item
+
+        self._last_song_picker_entries = entries
+        self._last_song_picker_enabled = enabled
 
     def update_seek_markers(self, current_segment=None):
         if self._last_seek_segment == current_segment:

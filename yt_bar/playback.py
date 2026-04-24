@@ -63,6 +63,16 @@ class PlaybackController:
         with self._lock:
             return self._track_at_current_index_locked() is not None
 
+    def current_playlist_tracks(self):
+        with self._lock:
+            if (
+                self._current_item is None
+                or self._current_item.kind != "playlist"
+                or len(self._tracks) < 2
+            ):
+                return ()
+            return tuple(self._tracks)
+
     def start_item(self, item, *, playback_mode):
         with self._lock:
             self._current_item = item

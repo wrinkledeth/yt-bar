@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import yt_bar.app as app_module
-from yt_bar.models import MenuAction, ResolvedItem, TrackInfo, UICommand
+from yt_bar.models import MenuAction, MenuPlaylistTrackEntry, ResolvedItem, TrackInfo, UICommand
 from yt_bar.playback import LOCAL_PLAYBACK_MODE
 
 
@@ -246,8 +246,12 @@ def install_rename_prompt(monkeypatch, *, response=1000, edited_value=None):
 
 def make_app_stub():
     app = app_module.YTBar.__new__(app_module.YTBar)
-    app.engine = SimpleNamespace(is_active=False)
-    app.playback = SimpleNamespace(playback_mode_for_item=lambda item: "stream")
+    app.engine = SimpleNamespace(is_active=False, is_paused=False)
+    app.playback = SimpleNamespace(
+        playback_mode_for_item=lambda item: "stream",
+        has_current_track=lambda: False,
+        current_playlist_tracks=lambda: (),
+    )
     app._local_file_panel = None
     app._local_file_picker_timer = None
     app._local_file_picker_timer_target = None
@@ -255,10 +259,18 @@ def make_app_stub():
     app._recent_rename_timer = None
     app._recent_rename_timer_target = None
     app._pending_recent_rename_key = None
+    app._now_playing_title = "Not Playing"
+    app._now_playing_playback_mode = None
+    app._progress_elapsed = None
+    app._progress_duration = None
+    app._compact_menu = False
+    app._skip_interval = 30.0
+    app._recent_limit = 10
     app._render_menu = lambda: None
     app.recent = SimpleNamespace(
         display_title_for_recent=lambda _key: None,
         rename=lambda _key, _title: False,
+        menu_entries=lambda _limit: (),
     )
     queued = []
     started = []
@@ -403,6 +415,89 @@ def test_on_play_local_file_ignores_picker_cancel(monkeypatch):
     assert imported_paths == []
     assert started == []
     assert queued == []
+
+
+def test_song_picker_entries_follow_current_playlist_tracks():
+    app, _, _ = make_app_stub()
+    tracks = [
+        TrackInfo(
+            id="track-1",
+            title="Track One",
+            duration=123.0,
+            source_url="https://example.test/audio-1",
+            local_path="songs/track-1.opus",
+        ),
+        TrackInfo(
+            id="track-2",
+            title="Track Two",
+            duration=234.0,
+            source_url="https://example.test/audio-2",
+            local_path="songs/track-2.opus",
+        ),
+    ]
+    app.playback = SimpleNamespace(
+        has_current_track=lambda: True,
+        current_playlist_tracks=lambda: tuple(tracks),
+    )
+
+    assert app._song_picker_entries() == (
+        MenuPlaylistTrackEntry(index=0, title="Track One"),
+        MenuPlaylistTrackEntry(index=1, title="Track Two"),
+    )
+
+
+def test_menu_snapshot_includes_song_picker_state():
+    app, _, _ = make_app_stub()
+    app._now_playing_title = "Current track"
+    app._now_playing_playback_mode = "stream"
+    app._progress_elapsed = 12.5
+    app._progress_duration = 100.0
+    app._skip_interval = 45.0
+    app._recent_limit = 5
+    app.playback = SimpleNamespace(
+        has_current_track=lambda: True,
+        current_playlist_tracks=lambda: (
+            TrackInfo(
+                id="track-1",
+                title="Track One",
+                duration=123.0,
+                source_url="https://example.test/audio-1",
+                local_path="songs/track-1.opus",
+            ),
+            TrackInfo(
+                id="track-2",
+                title="Track Two",
+                duration=234.0,
+                source_url="https://example.test/audio-2",
+                local_path="songs/track-2.opus",
+            ),
+        ),
+    )
+    app.recent = SimpleNamespace(menu_entries=lambda _limit: ())
+
+    snapshot = app._menu_snapshot()
+
+    assert snapshot.song_picker_enabled is True
+    assert snapshot.song_picker_entries == (
+        MenuPlaylistTrackEntry(index=0, title="Track One"),
+        MenuPlaylistTrackEntry(index=1, title="Track Two"),
+    )
+
+
+def test_song_picker_action_starts_selected_playlist_track():
+    app, _, _ = make_app_stub()
+    play_calls = []
+    render_calls = []
+    app.playback = SimpleNamespace(current_playlist_tracks=lambda: ("first", "second"))
+    app._play_track = lambda index, start_time=0, paused=False: play_calls.append(
+        (index, start_time, paused)
+    )
+    app._render_menu = lambda: render_calls.append("render")
+
+    app._handle_menu_action(MenuAction.play_current_playlist_track(1))
+
+    assert play_calls == [(1, 0, False)]
+    assert render_calls == ["render"]
 
 
 def test_rename_recent_action_prompts_and_saves_override(monkeypatch):

@@ -13,6 +13,7 @@ from .menu import MenuController
 from .models import (
     MenuAction,
     MenuActionKind,
+    MenuPlaylistTrackEntry,
     MenuSnapshot,
     UICommand,
     UICommandKind,
@@ -110,6 +111,7 @@ class YTBar(rumps.App):
         self.menu = layout
 
     def _menu_snapshot(self):
+        song_picker_entries = self._song_picker_entries()
         return MenuSnapshot(
             now_playing_title=self._now_playing_title,
             playback_mode=self._now_playing_playback_mode,
@@ -121,11 +123,19 @@ class YTBar(rumps.App):
             compact_menu=self._compact_menu,
             skip_interval=self._skip_interval,
             recent_limit=self._recent_limit,
+            song_picker_enabled=bool(song_picker_entries),
+            song_picker_entries=song_picker_entries,
             recent_entries=self.recent.menu_entries(self._recent_limit),
         )
 
     def _render_menu(self):
         self.menu_controller.render(self._menu_snapshot())
+
+    def _song_picker_entries(self):
+        return tuple(
+            MenuPlaylistTrackEntry(index=index, title=track.title)
+            for index, track in enumerate(self.playback.current_playlist_tracks())
+        )
 
     def _load_settings(self):
         settings = self.settings_store.load()
@@ -324,6 +334,11 @@ class YTBar(rumps.App):
             self.on_playpause(None)
         elif action.kind is MenuActionKind.SEEK_PERCENT and action.percent is not None:
             self._seek_to_pct(action.percent)
+        elif (
+            action.kind is MenuActionKind.PLAY_CURRENT_PLAYLIST_TRACK
+            and action.track_index is not None
+        ):
+            self._play_current_playlist_track(action.track_index)
         elif action.kind is MenuActionKind.PLAY_RECENT and action.cache_key is not None:
             self._play_recent_entry(action.cache_key)
         elif action.kind is MenuActionKind.RENAME_RECENT and action.cache_key is not None:
@@ -529,6 +544,11 @@ class YTBar(rumps.App):
             return
 
         self._start_item_playback(item, playback_mode=LOCAL_PLAYBACK_MODE)
+
+    def _play_current_playlist_track(self, index):
+        if not self.playback.current_playlist_tracks():
+            return
+        self._play_track(index, start_time=0, paused=False)
 
     def on_paste_url(self, _):
         url = self._get_clipboard().strip().replace("\\", "")

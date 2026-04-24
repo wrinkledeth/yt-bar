@@ -1,6 +1,7 @@
 from yt_bar.models import (
     MenuAction,
     MenuActionKind,
+    MenuPlaylistTrackEntry,
     MenuRecentEntry,
     MenuSnapshot,
     PlaybackSession,
@@ -30,6 +31,7 @@ def test_menu_action_factories_create_typed_actions():
     assert MenuAction.recent_menu_will_open().kind is MenuActionKind.RECENT_MENU_WILL_OPEN
 
     seek = MenuAction.seek_percent("40")
+    play_current_playlist_track = MenuAction.play_current_playlist_track("2")
     play_recent = MenuAction.play_recent("video:abc")
     rename_recent = MenuAction.rename_recent("video:abc")
     remove_recent = MenuAction.remove_recent("playlist:def")
@@ -38,6 +40,8 @@ def test_menu_action_factories_create_typed_actions():
 
     assert seek.kind is MenuActionKind.SEEK_PERCENT
     assert seek.percent == 40
+    assert play_current_playlist_track.kind is MenuActionKind.PLAY_CURRENT_PLAYLIST_TRACK
+    assert play_current_playlist_track.track_index == 2
     assert play_recent.kind is MenuActionKind.PLAY_RECENT
     assert play_recent.cache_key == "video:abc"
     assert rename_recent.kind is MenuActionKind.RENAME_RECENT
@@ -51,6 +55,7 @@ def test_menu_action_factories_create_typed_actions():
 
 
 def test_menu_snapshot_carries_render_state_immutably():
+    song_picker_entry = MenuPlaylistTrackEntry(index=1, title="Track Two")
     recent_entry = MenuRecentEntry(cache_key="video:1", title="A title")
     snapshot = MenuSnapshot(
         now_playing_title="Current track",
@@ -63,11 +68,14 @@ def test_menu_snapshot_carries_render_state_immutably():
         compact_menu=True,
         skip_interval=45.0,
         recent_limit=5,
+        song_picker_enabled=True,
+        song_picker_entries=(song_picker_entry,),
         recent_entries=(recent_entry,),
     )
 
     assert snapshot.now_playing_title == "Current track"
     assert snapshot.playback_mode == "stream"
+    assert snapshot.song_picker_entries == (song_picker_entry,)
     assert snapshot.recent_entries == (recent_entry,)
 
 

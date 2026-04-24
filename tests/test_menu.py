@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import yt_bar.menu as menu_module
-from yt_bar.models import MenuAction, MenuRecentEntry, MenuSnapshot
+from yt_bar.models import MenuAction, MenuPlaylistTrackEntry, MenuRecentEntry, MenuSnapshot
 
 
 class FakeNativeMenuItem:
@@ -108,6 +108,11 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
         compact_menu=False,
         skip_interval=60.0,
         recent_limit=10,
+        song_picker_enabled=True,
+        song_picker_entries=(
+            MenuPlaylistTrackEntry(index=0, title="Track One"),
+            MenuPlaylistTrackEntry(index=1, title="Track Two"),
+        ),
         recent_entries=(MenuRecentEntry(cache_key="video:1", title="First Recent"),),
     )
 
@@ -123,6 +128,7 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
         None,
         controller.playpause_item,
         controller.seek_menu,
+        controller.song_picker_menu,
         None,
         controller.settings_menu,
     ]
@@ -135,6 +141,8 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
     assert controller.playpause_item.callback is not None
     assert controller.playpause_item._menuitem.enabled is True
     assert controller.seek_menu._menuitem.enabled is True
+    assert controller.song_picker_menu._menuitem.enabled is True
+    assert controller.song_picker_menu.children["song_picker_1"].title == "Track Two"
     assert controller.seek_items[3].title == "  ● 30%"
     assert controller.compact_menu_item.state == 0
     assert controller.skip_items[60.0].state == 1
@@ -150,6 +158,7 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
     controller.local_file_item.callback(None)
     controller.playpause_item.callback(None)
     controller.seek_items[3].callback(None)
+    controller.song_picker_menu.children["song_picker_1"].callback(None)
     controller.recent_menu.children["recent_play_0"].callback(None)
     controller.recent_menu.children["recent_rename_0"].callback(None)
     controller.recent_menu.children["recent_remove_0"].callback(None)
@@ -163,6 +172,7 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
         MenuAction.play_local_file(),
         MenuAction.play_pause(),
         MenuAction.seek_percent(30),
+        MenuAction.play_current_playlist_track(1),
         MenuAction.play_recent("video:1"),
         MenuAction.rename_recent("video:1"),
         MenuAction.remove_recent("video:1"),
@@ -213,3 +223,26 @@ def test_render_builds_compact_menu_and_empty_recent_placeholder(monkeypatch):
     assert controller.recent_size_items[20].state == 1
     assert controller.recent_menu.children["recent_empty"].title == "No recent items"
     assert controller.recent_menu.children["recent_empty"].callback is None
+
+
+def test_render_disables_song_picker_without_multi_track_playlist(monkeypatch):
+    controller, _, _ = make_controller(monkeypatch)
+    snapshot = MenuSnapshot(
+        now_playing_title="Current track",
+        playback_mode="local",
+        active=False,
+        paused=False,
+        has_current_track=True,
+        compact_menu=False,
+        skip_interval=30.0,
+        recent_limit=10,
+        song_picker_enabled=False,
+        song_picker_entries=(),
+        recent_entries=(),
+    )
+
+    controller.render(snapshot)
+
+    assert controller.song_picker_menu._menuitem.enabled is False
+    assert controller.song_picker_menu.children["song_picker_empty"].title == "No songs available"
+    assert controller.song_picker_menu.children["song_picker_empty"].callback is None

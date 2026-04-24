@@ -68,6 +68,7 @@ class MenuActionKind(Enum):
     PLAY_LOCAL_FILE = "play_local_file"
     PLAY_PAUSE = "play_pause"
     SEEK_PERCENT = "seek_percent"
+    PLAY_CURRENT_PLAYLIST_TRACK = "play_current_playlist_track"
     PLAY_RECENT = "play_recent"
     RENAME_RECENT = "rename_recent"
     REMOVE_RECENT = "remove_recent"
@@ -81,6 +82,7 @@ class MenuActionKind(Enum):
 class MenuAction:
     kind: MenuActionKind
     percent: int | None = None
+    track_index: int | None = None
     cache_key: str | None = None
     seconds: float | None = None
     recent_limit: int | None = None
@@ -100,6 +102,10 @@ class MenuAction:
     @classmethod
     def seek_percent(cls, percent):
         return cls(MenuActionKind.SEEK_PERCENT, percent=int(percent))
+
+    @classmethod
+    def play_current_playlist_track(cls, track_index):
+        return cls(MenuActionKind.PLAY_CURRENT_PLAYLIST_TRACK, track_index=int(track_index))
 
     @classmethod
     def play_recent(cls, cache_key):
@@ -137,6 +143,12 @@ class MenuRecentEntry:
 
 
 @dataclass(frozen=True)
+class MenuPlaylistTrackEntry:
+    index: int
+    title: str
+
+
+@dataclass(frozen=True)
 class MenuSnapshot:
     now_playing_title: str = "Not Playing"
     playback_mode: str | None = None
@@ -148,6 +160,8 @@ class MenuSnapshot:
     compact_menu: bool = False
     skip_interval: float = 30.0
     recent_limit: int = 10
+    song_picker_enabled: bool = False
+    song_picker_entries: tuple[MenuPlaylistTrackEntry, ...] = ()
     recent_entries: tuple[MenuRecentEntry, ...] = ()
 
 
