@@ -167,11 +167,13 @@ class MenuController:
             item.state = 1 if value == snapshot.recent_limit else 0
 
     @staticmethod
-    def mark_option_alternate(menu_item):
+    def modifier_flag(name, fallback):
+        return getattr(AppKit, name, fallback)
+
+    @classmethod
+    def mark_alternate(cls, menu_item, modifier_mask):
         menu_item._menuitem.setAlternate_(True)
-        menu_item._menuitem.setKeyEquivalentModifierMask_(
-            getattr(AppKit, "NSEventModifierFlagOption", AppKit.NSAlternateKeyMask)
-        )
+        menu_item._menuitem.setKeyEquivalentModifierMask_(modifier_mask)
 
     def rebuild_recent_menu(self, snapshot: MenuSnapshot):
         entries = snapshot.recent_entries
@@ -190,6 +192,14 @@ class MenuController:
 
         for index, entry in enumerate(entries):
             title = truncate_title(entry.title)
+            option_mask = self.modifier_flag(
+                "NSEventModifierFlagOption",
+                AppKit.NSAlternateKeyMask,
+            )
+            shift_mask = self.modifier_flag(
+                "NSEventModifierFlagShift",
+                AppKit.NSShiftKeyMask,
+            )
             play_item = rumps.MenuItem(
                 title,
                 callback=lambda _, key=entry.cache_key: self._dispatch(MenuAction.play_recent(key)),
@@ -200,9 +210,17 @@ class MenuController:
                     MenuAction.remove_recent(key)
                 ),
             )
-            self.mark_option_alternate(remove_item)
+            rename_item = rumps.MenuItem(
+                "Rename…",
+                callback=lambda _, key=entry.cache_key: self._dispatch(
+                    MenuAction.rename_recent(key)
+                ),
+            )
+            self.mark_alternate(remove_item, option_mask)
+            self.mark_alternate(rename_item, option_mask | shift_mask)
             self.recent_menu[f"recent_play_{index}"] = play_item
             self.recent_menu[f"recent_remove_{index}"] = remove_item
+            self.recent_menu[f"recent_rename_{index}"] = rename_item
 
         self.install_recent_menu_delegate()
         self._last_recent_entries = entries

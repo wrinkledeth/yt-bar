@@ -69,6 +69,7 @@ class MenuActionKind(Enum):
     PLAY_PAUSE = "play_pause"
     SEEK_PERCENT = "seek_percent"
     PLAY_RECENT = "play_recent"
+    RENAME_RECENT = "rename_recent"
     REMOVE_RECENT = "remove_recent"
     TOGGLE_COMPACT_MENU = "toggle_compact_menu"
     SET_SKIP_INTERVAL = "set_skip_interval"
@@ -103,6 +104,10 @@ class MenuAction:
     @classmethod
     def play_recent(cls, cache_key):
         return cls(MenuActionKind.PLAY_RECENT, cache_key=str(cache_key))
+
+    @classmethod
+    def rename_recent(cls, cache_key):
+        return cls(MenuActionKind.RENAME_RECENT, cache_key=str(cache_key))
 
     @classmethod
     def remove_recent(cls, cache_key):
@@ -315,13 +320,18 @@ class RecentItem:
     source_url: str
     last_played: float
     tracks: list[TrackInfo]
+    title_override: str | None = None
 
     @property
     def cache_key(self):
         return f"{self.kind}:{self.id}"
 
+    @property
+    def display_title(self):
+        return self.title_override or self.title
+
     def to_dict(self):
-        return {
+        payload = {
             "kind": self.kind,
             "id": self.id,
             "title": self.title,
@@ -329,9 +339,17 @@ class RecentItem:
             "last_played": self.last_played,
             "tracks": [track.to_dict() for track in self.tracks],
         }
+        if self.title_override is not None:
+            payload["title_override"] = self.title_override
+        return payload
 
     @classmethod
     def from_dict(cls, data):
+        title_override = data.get("title_override")
+        if not isinstance(title_override, str):
+            title_override = None
+        else:
+            title_override = title_override.strip() or None
         return cls(
             kind=(data.get("kind") or "video").strip() or "video",
             id=sanitize_cache_key(str(data.get("id") or stable_hash(data.get("source_url", "")))),
@@ -343,6 +361,7 @@ class RecentItem:
                 for track_data in data.get("tracks", [])
                 if isinstance(track_data, dict)
             ],
+            title_override=title_override,
         )
 
 

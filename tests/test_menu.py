@@ -69,7 +69,12 @@ def install_menu_fakes(monkeypatch):
     monkeypatch.setattr(
         menu_module,
         "AppKit",
-        SimpleNamespace(NSEventModifierFlagOption=524288, NSAlternateKeyMask=524288),
+        SimpleNamespace(
+            NSEventModifierFlagOption=524288,
+            NSAlternateKeyMask=524288,
+            NSEventModifierFlagShift=131072,
+            NSShiftKeyMask=131072,
+        ),
     )
     monkeypatch.setattr(menu_module, "RecentMenuObserver", FakeRecentMenuObserver)
 
@@ -135,13 +140,18 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
     assert controller.skip_items[60.0].state == 1
     assert controller.recent_size_items[10].state == 1
     assert controller.recent_menu._menu.delegate is controller._recent_menu_observer
+    assert controller.recent_menu.children["recent_rename_0"].title == "Rename…"
+    assert controller.recent_menu.children["recent_rename_0"]._menuitem.alternate is True
+    assert controller.recent_menu.children["recent_rename_0"]._menuitem.modifier_mask == 655360
     assert controller.recent_menu.children["recent_remove_0"]._menuitem.alternate is True
+    assert controller.recent_menu.children["recent_remove_0"]._menuitem.modifier_mask == 524288
 
     controller.paste_item.callback(None)
     controller.local_file_item.callback(None)
     controller.playpause_item.callback(None)
     controller.seek_items[3].callback(None)
     controller.recent_menu.children["recent_play_0"].callback(None)
+    controller.recent_menu.children["recent_rename_0"].callback(None)
     controller.recent_menu.children["recent_remove_0"].callback(None)
     controller.compact_menu_item.callback(None)
     controller.skip_items[60.0].callback(None)
@@ -154,6 +164,7 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
         MenuAction.play_pause(),
         MenuAction.seek_percent(30),
         MenuAction.play_recent("video:1"),
+        MenuAction.rename_recent("video:1"),
         MenuAction.remove_recent("video:1"),
         MenuAction.toggle_compact_menu(),
         MenuAction.set_skip_interval(60.0),

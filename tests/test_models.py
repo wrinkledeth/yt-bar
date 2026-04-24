@@ -31,6 +31,7 @@ def test_menu_action_factories_create_typed_actions():
 
     seek = MenuAction.seek_percent("40")
     play_recent = MenuAction.play_recent("video:abc")
+    rename_recent = MenuAction.rename_recent("video:abc")
     remove_recent = MenuAction.remove_recent("playlist:def")
     skip = MenuAction.set_skip_interval("45")
     recent_limit = MenuAction.set_recent_limit("5")
@@ -39,6 +40,8 @@ def test_menu_action_factories_create_typed_actions():
     assert seek.percent == 40
     assert play_recent.kind is MenuActionKind.PLAY_RECENT
     assert play_recent.cache_key == "video:abc"
+    assert rename_recent.kind is MenuActionKind.RENAME_RECENT
+    assert rename_recent.cache_key == "video:abc"
     assert remove_recent.kind is MenuActionKind.REMOVE_RECENT
     assert remove_recent.cache_key == "playlist:def"
     assert skip.kind is MenuActionKind.SET_SKIP_INTERVAL

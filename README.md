@@ -77,7 +77,7 @@ Core:
 - Use `Play Local File...` to import a local audio file into the app library and play it.
 - Or drag a local audio file onto the menu bar item to import and play it.
 - Playback starts immediately, and the track is cached locally while you listen.
-- `Recent` lets you replay cached YouTube tracks and imported local files.
+- `Recent` lets you replay cached YouTube tracks and imported local files. Hold `Option` to remove an entry or `Option` + `Shift` to rename its label.
 - Use F7 / F8 / F9 media keys to play/pause and skip forward or back.
 
 Additional:

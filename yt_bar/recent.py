@@ -35,9 +35,34 @@ class RecentController:
                 reverse=True,
             )
             return tuple(
-                MenuRecentEntry(cache_key=entry.cache_key, title=entry.title)
+                MenuRecentEntry(cache_key=entry.cache_key, title=entry.display_title)
                 for entry in entries[:limit]
             )
+
+    def display_title_for_recent(self, cache_key):
+        with self._lock:
+            entry = self._entries.get(cache_key)
+            if entry is None:
+                return None
+            return entry.display_title
+
+    def rename(self, cache_key, title_override):
+        with self._lock:
+            entry = self._entries.get(cache_key)
+            if entry is None:
+                return False
+
+            override = None
+            if title_override is not None:
+                override = str(title_override).strip() or None
+
+            if entry.title_override == override:
+                return False
+
+            entry.title_override = override
+            self._save_locked()
+            self._mark_dirty_locked()
+            return True
 
     def remove(self, cache_key):
         with self._lock:
@@ -126,6 +151,7 @@ class RecentController:
             source_url=item.source_url,
             last_played=effective_last_played,
             tracks=cached_tracks,
+            title_override=existing.title_override if existing is not None else None,
         )
 
         if existing is not None and existing.to_dict() == updated.to_dict():

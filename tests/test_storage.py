@@ -68,9 +68,38 @@ def test_recent_store_loads_valid_entries_by_cache_key(tmp_path):
     assert list(entries) == ["video:one"]
     recent = entries["video:one"]
     assert recent.title == "One"
+    assert recent.title_override is None
     assert recent.tracks[0].id == "track_one"
     assert recent.tracks[0].duration == 12.5
     assert recent.tracks[0].local_path == "songs/one.opus"
+
+
+def test_recent_store_round_trips_title_override(tmp_path):
+    path = tmp_path / "recent.json"
+    store = RecentStore(path)
+    entry = RecentItem(
+        kind="video",
+        id="named",
+        title="Original Title",
+        source_url="https://example.test/named",
+        last_played=4.0,
+        tracks=[
+            TrackInfo(
+                id="named",
+                title="Original Title",
+                duration=1.0,
+                source_url="https://example.test/named",
+                local_path="songs/named.opus",
+            )
+        ],
+        title_override="Custom Label",
+    )
+
+    store.save({entry.cache_key: entry})
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload[0]["title_override"] == "Custom Label"
+    assert store.load()[entry.cache_key].title_override == "Custom Label"
 
 
 def test_recent_store_saves_newest_entries_first(tmp_path):

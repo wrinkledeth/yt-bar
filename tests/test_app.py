@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import yt_bar.app as app_module
-from yt_bar.models import ResolvedItem, TrackInfo, UICommand
+from yt_bar.models import MenuAction, ResolvedItem, TrackInfo, UICommand
 from yt_bar.playback import LOCAL_PLAYBACK_MODE
 
 
@@ -61,6 +61,52 @@ class FakeOpenPanel:
         if self.path is None:
             return None
         return FakeURL(self.path)
+
+
+class FakeAlert:
+    def __init__(self, response, edited_value):
+        self.response = response
+        self.edited_value = edited_value
+        self.message_text = None
+        self.informative_text = None
+        self.buttons = []
+        self.accessory_view = None
+
+    def init(self):
+        return self
+
+    def setMessageText_(self, value):
+        self.message_text = value
+
+    def setInformativeText_(self, value):
+        self.informative_text = value
+
+    def addButtonWithTitle_(self, value):
+        self.buttons.append(value)
+
+    def setAccessoryView_(self, value):
+        self.accessory_view = value
+
+    def runModal(self):
+        if self.accessory_view is not None and self.edited_value is not None:
+            self.accessory_view.setStringValue_(self.edited_value)
+        return self.response
+
+
+class FakeTextField:
+    def __init__(self):
+        self.frame = None
+        self.value = ""
+
+    def initWithFrame_(self, frame):
+        self.frame = frame
+        return self
+
+    def setStringValue_(self, value):
+        self.value = value
+
+    def stringValue(self):
+        return self.value
 
 
 class FakeApplication:
@@ -163,6 +209,41 @@ def install_open_panel(monkeypatch, *, response=1, path=None):
     return panel, application
 
 
+def install_rename_prompt(monkeypatch, *, response=1000, edited_value=None):
+    application = FakeApplication()
+    alert = FakeAlert(response, edited_value)
+    text_field = FakeTextField()
+
+    class FakeNSAlert:
+        @staticmethod
+        def alloc():
+            return alert
+
+    class FakeNSTextField:
+        @staticmethod
+        def alloc():
+            return text_field
+
+    class FakeNSApplication:
+        @staticmethod
+        def sharedApplication():
+            return application
+
+    monkeypatch.setattr(
+        app_module,
+        "AppKit",
+        SimpleNamespace(
+            NSAlert=FakeNSAlert,
+            NSTextField=FakeNSTextField,
+            NSApplication=FakeNSApplication,
+            NSApplicationActivationPolicyRegular=0,
+            NSAlertFirstButtonReturn=1000,
+            NSMakeRect=lambda x, y, w, h: (x, y, w, h),
+        ),
+    )
+    return alert, text_field, application
+
+
 def make_app_stub():
     app = app_module.YTBar.__new__(app_module.YTBar)
     app.engine = SimpleNamespace(is_active=False)
@@ -171,6 +252,14 @@ def make_app_stub():
     app._local_file_picker_timer = None
     app._local_file_picker_timer_target = None
     app._local_file_panel_activation_policy = None
+    app._recent_rename_timer = None
+    app._recent_rename_timer_target = None
+    app._pending_recent_rename_key = None
+    app._render_menu = lambda: None
+    app.recent = SimpleNamespace(
+        display_title_for_recent=lambda _key: None,
+        rename=lambda _key, _title: False,
+    )
     queued = []
     started = []
 
@@ -314,6 +403,70 @@ def test_on_play_local_file_ignores_picker_cancel(monkeypatch):
     assert imported_paths == []
     assert started == []
     assert queued == []
+
+
+def test_rename_recent_action_prompts_and_saves_override(monkeypatch):
+    app, _, _ = make_app_stub()
+    alert, text_field, application = install_rename_prompt(
+        monkeypatch,
+        edited_value="Custom Label",
+    )
+    rename_calls = []
+    render_calls = []
+    timer_calls = []
+
+    app.recent = SimpleNamespace(
+        display_title_for_recent=lambda key: "Original Title" if key == "video:1" else None,
+        rename=lambda key, title: rename_calls.append((key, title)) or True,
+    )
+    app._render_menu = lambda: render_calls.append("render")
+
+    monkeypatch.setattr(
+        app_module,
+        "schedule_default_mode_timer_once",
+        lambda delay, callback: timer_calls.append(delay) or callback() or ("timer", "target"),
+    )
+
+    app._handle_menu_action(MenuAction.rename_recent("video:1"))
+
+    assert timer_calls == [0.0]
+    assert alert.message_text == "Rename Recent"
+    assert alert.buttons == ["Save", "Cancel"]
+    assert text_field.frame == (0, 0, 320, 24)
+    assert text_field.value == "Custom Label"
+    assert rename_calls == [("video:1", "Custom Label")]
+    assert application.policy_changes == [0, 1]
+    assert application.activations == [True]
+    assert render_calls == ["render", "render"]
+
+
+def test_rename_recent_action_cancel_leaves_entry_unchanged(monkeypatch):
+    app, _, _ = make_app_stub()
+    _, text_field, application = install_rename_prompt(monkeypatch, response=0)
+    rename_calls = []
+    timer_calls = []
+    render_calls = []
+
+    app.recent = SimpleNamespace(
+        display_title_for_recent=lambda key: "Original Title" if key == "video:1" else None,
+        rename=lambda key, title: rename_calls.append((key, title)) or True,
+    )
+    app._render_menu = lambda: render_calls.append("render")
+
+    monkeypatch.setattr(
+        app_module,
+        "schedule_default_mode_timer_once",
+        lambda delay, callback: timer_calls.append(delay) or callback() or ("timer", "target"),
+    )
+
+    app._handle_menu_action(MenuAction.rename_recent("video:1"))
+
+    assert timer_calls == [0.0]
+    assert text_field.value == "Original Title"
+    assert rename_calls == []
+    assert application.policy_changes == [0, 1]
+    assert application.activations == [True]
+    assert render_calls == ["render"]
 
 
 def test_install_status_item_file_drop_registers_button_callback(monkeypatch):

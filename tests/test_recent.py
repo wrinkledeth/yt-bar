@@ -145,3 +145,95 @@ def test_remove_saves_and_marks_dirty(tmp_path):
     assert entry.cache_key not in store.saved[-1]
     assert recent.remove(entry.cache_key) is False
     assert recent.consume_dirty() is True
+
+
+def test_rename_sets_override_and_keeps_canonical_recent_item(tmp_path):
+    path = tmp_path / "track.opus"
+    path.write_bytes(b"track")
+    entry = RecentItem(
+        kind="video",
+        id="track",
+        title="Track",
+        source_url="https://example.test/track",
+        last_played=40.0,
+        tracks=[make_track("track", path)],
+    )
+    store = MemoryRecentStore({entry.cache_key: entry})
+    recent = RecentController(store=store)
+    recent.load()
+
+    assert recent.rename(entry.cache_key, "Custom Label") is True
+    assert store.saved[-1][entry.cache_key].title_override == "Custom Label"
+    assert recent.menu_entries(10)[0].title == "Custom Label"
+    assert recent.item_for_recent(entry.cache_key).title == "Track"
+    assert recent.consume_dirty() is True
+
+
+def test_empty_rename_clears_override(tmp_path):
+    path = tmp_path / "track.opus"
+    path.write_bytes(b"track")
+    entry = RecentItem(
+        kind="video",
+        id="track",
+        title="Track",
+        source_url="https://example.test/track",
+        last_played=40.0,
+        tracks=[make_track("track", path)],
+        title_override="Custom Label",
+    )
+    store = MemoryRecentStore({entry.cache_key: entry})
+    recent = RecentController(store=store)
+    recent.load()
+
+    assert recent.rename(entry.cache_key, "   ") is True
+    assert store.saved[-1][entry.cache_key].title_override is None
+    assert recent.menu_entries(10)[0].title == "Track"
+
+
+def test_refresh_for_cache_preserves_title_override(tmp_path):
+    path = tmp_path / "track.opus"
+    path.write_bytes(b"track")
+    entry = RecentItem(
+        kind="video",
+        id="track",
+        title="Old Title",
+        source_url="https://example.test/track",
+        last_played=25.0,
+        tracks=[make_track("track", path)],
+        title_override="Custom Label",
+    )
+    item = make_item("video", "track", [make_track("track", path)])
+    item.title = "Updated Title"
+    store = MemoryRecentStore({entry.cache_key: entry})
+    recent = RecentController(store=store)
+    recent.load()
+
+    assert recent.refresh_for_cache(item) is True
+    saved = store.saved[-1][entry.cache_key]
+    assert saved.title == "Updated Title"
+    assert saved.title_override == "Custom Label"
+    assert recent.menu_entries(10)[0].title == "Custom Label"
+
+
+def test_record_item_played_preserves_title_override(tmp_path):
+    path = tmp_path / "track.opus"
+    path.write_bytes(b"track")
+    entry = RecentItem(
+        kind="video",
+        id="track",
+        title="Track",
+        source_url="https://example.test/track",
+        last_played=40.0,
+        tracks=[make_track("track", path)],
+        title_override="Custom Label",
+    )
+    item = make_item("video", "track", [make_track("track", path)])
+    store = MemoryRecentStore({entry.cache_key: entry})
+    recent = RecentController(store=store, clock=lambda: 99.0)
+    recent.load()
+
+    assert recent.record_item_played(item) is True
+    saved = store.saved[-1][entry.cache_key]
+    assert saved.last_played == 99.0
+    assert saved.title_override == "Custom Label"
+    assert recent.menu_entries(10)[0].title == "Custom Label"

@@ -50,6 +50,9 @@ class YTBar(rumps.App):
         self._local_file_picker_timer = None
         self._local_file_picker_timer_target = None
         self._local_file_panel_activation_policy = None
+        self._recent_rename_timer = None
+        self._recent_rename_timer_target = None
+        self._pending_recent_rename_key = None
 
         self.settings_store = SettingsStore()
         self.recent = RecentController()
@@ -163,6 +166,54 @@ class YTBar(rumps.App):
         if self.recent.remove(cache_key):
             self._render_menu()
 
+    def _present_recent_rename_prompt(self, _=None):
+        self._recent_rename_timer = None
+        self._recent_rename_timer_target = None
+        cache_key = self._pending_recent_rename_key
+        self._pending_recent_rename_key = None
+        if cache_key is None:
+            return
+
+        title = self.recent.display_title_for_recent(cache_key)
+        if title is None:
+            return
+
+        self._activate_app_for_panel()
+        try:
+            alert = AppKit.NSAlert.alloc().init()
+            alert.setMessageText_("Rename Recent")
+            alert.setInformativeText_(
+                "Set a custom label for this Recent entry. Leave blank to clear it."
+            )
+            alert.addButtonWithTitle_("Save")
+            alert.addButtonWithTitle_("Cancel")
+
+            rect = AppKit.NSMakeRect(0, 0, 320, 24)
+            text_field = AppKit.NSTextField.alloc().initWithFrame_(rect)
+            text_field.setStringValue_(title)
+            alert.setAccessoryView_(text_field)
+
+            ok_response = getattr(
+                AppKit,
+                "NSAlertFirstButtonReturn",
+                getattr(AppKit, "NSModalResponseOK", 1000),
+            )
+            if alert.runModal() != ok_response:
+                return
+
+            if self.recent.rename(cache_key, text_field.stringValue()):
+                self._render_menu()
+        finally:
+            self._restore_app_after_panel()
+
+    def _rename_recent_entry(self, cache_key):
+        if self._recent_rename_timer is not None:
+            return
+        self._pending_recent_rename_key = cache_key
+        self._recent_rename_timer, self._recent_rename_timer_target = (
+            schedule_default_mode_timer_once(0.0, self._present_recent_rename_prompt)
+        )
+
     def _set_progress_display(self, elapsed=None, duration=None):
         if elapsed is None:
             if not self.engine.is_active:
@@ -275,6 +326,8 @@ class YTBar(rumps.App):
             self._seek_to_pct(action.percent)
         elif action.kind is MenuActionKind.PLAY_RECENT and action.cache_key is not None:
             self._play_recent_entry(action.cache_key)
+        elif action.kind is MenuActionKind.RENAME_RECENT and action.cache_key is not None:
+            self._rename_recent_entry(action.cache_key)
         elif action.kind is MenuActionKind.REMOVE_RECENT and action.cache_key is not None:
             self._remove_recent_entry(action.cache_key)
         elif action.kind is MenuActionKind.TOGGLE_COMPACT_MENU:
