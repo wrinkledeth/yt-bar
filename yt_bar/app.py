@@ -17,7 +17,11 @@ from .models import (
     UICommand,
     UICommandKind,
 )
-from .objc_bridges import schedule_common_mode_timer, schedule_default_mode_timer_once
+from .objc_bridges import (
+    install_status_item_file_drop,
+    schedule_common_mode_timer,
+    schedule_default_mode_timer_once,
+)
 from .playback import LOCAL_PLAYBACK_MODE, PlaybackController
 from .recent import RecentController
 from .remote_commands import RemoteCommandController
@@ -58,6 +62,7 @@ class YTBar(rumps.App):
         self._load_settings()
         self.recent.load()
         self.recent.sweep_stale_entries()
+        rumps.events.before_start.register(self._install_status_item_file_drop)
         rumps.events.before_quit.register(self._cleanup_before_quit)
 
         self.menu_controller = MenuController(
@@ -369,6 +374,23 @@ class YTBar(rumps.App):
     def _get_clipboard(self):
         pb = AppKit.NSPasteboard.generalPasteboard()
         return pb.stringForType_(AppKit.NSStringPboardType) or ""
+
+    def _install_status_item_file_drop(self):
+        nsapp = getattr(self, "_nsapp", None)
+        status_item = getattr(nsapp, "nsstatusitem", None)
+        if status_item is None:
+            return
+
+        button = status_item.button()
+        if button is None:
+            return
+
+        install_status_item_file_drop(button, self._handle_dropped_local_file)
+
+    def _handle_dropped_local_file(self, source_path):
+        if not source_path:
+            return
+        self._import_local_file_async(source_path)
 
     def _configure_local_file_panel(self):
         panel = AppKit.NSOpenPanel.openPanel()

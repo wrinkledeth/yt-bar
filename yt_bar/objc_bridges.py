@@ -1,7 +1,98 @@
+import os
+
+import AppKit
 import Foundation
 import objc
 
 from .utils import log_exception
+
+_status_item_file_drop_handlers = {}
+
+
+def _status_item_file_drop_key(button):
+    if button is None:
+        return None
+    try:
+        return objc.pyobjc_id(button)
+    except Exception:
+        return id(button)
+
+
+def _status_item_file_drop_handler(button):
+    return _status_item_file_drop_handlers.get(_status_item_file_drop_key(button))
+
+
+def _first_dragged_file_path(dragging_info):
+    if dragging_info is None:
+        return None
+
+    pasteboard = dragging_info.draggingPasteboard()
+    if pasteboard is None:
+        return None
+
+    options = {AppKit.NSPasteboardURLReadingFileURLsOnlyKey: True}
+    urls = pasteboard.readObjectsForClasses_options_([Foundation.NSURL], options) or ()
+    for url in urls:
+        try:
+            path = str(url.path() or "").strip()
+        except Exception:
+            continue
+        if not path or not os.path.isfile(path):
+            continue
+        return os.path.abspath(path)
+    return None
+
+
+def _status_item_dragging_entered(button, dragging_info):
+    if _status_item_file_drop_handler(button) is None:
+        return AppKit.NSDragOperationNone
+    if _first_dragged_file_path(dragging_info) is None:
+        return AppKit.NSDragOperationNone
+    return AppKit.NSDragOperationCopy
+
+
+def _status_item_prepare_drag_operation(button, dragging_info):
+    return (
+        _status_item_file_drop_handler(button) is not None
+        and _first_dragged_file_path(dragging_info) is not None
+    )
+
+
+def _status_item_perform_drag_operation(button, dragging_info):
+    handler = _status_item_file_drop_handler(button)
+    if handler is None:
+        return False
+
+    source_path = _first_dragged_file_path(dragging_info)
+    if source_path is None:
+        return False
+
+    try:
+        handler(source_path)
+    except Exception as exc:
+        log_exception("status item file drop", exc)
+        return False
+    return True
+
+
+def install_status_item_file_drop(button, on_path):
+    if button is None:
+        return
+
+    # PyObjC proxy objects cannot store arbitrary Python attributes.
+    _status_item_file_drop_handlers[_status_item_file_drop_key(button)] = on_path
+    button.registerForDraggedTypes_([AppKit.NSPasteboardTypeFileURL])
+
+
+class NSStatusBarButton(objc.Category(AppKit.NSStatusBarButton)):
+    def draggingEntered_(self, dragging_info):
+        return _status_item_dragging_entered(self, dragging_info)
+
+    def prepareForDragOperation_(self, dragging_info):
+        return _status_item_prepare_drag_operation(self, dragging_info)
+
+    def performDragOperation_(self, dragging_info):
+        return _status_item_perform_drag_operation(self, dragging_info)
 
 
 class EngineConfigurationObserver(Foundation.NSObject):

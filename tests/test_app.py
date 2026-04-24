@@ -80,6 +80,14 @@ class FakeApplication:
         self.policy_changes.append(int(value))
 
 
+class FakeStatusItem:
+    def __init__(self, button):
+        self._button = button
+
+    def button(self):
+        return self._button
+
+
 class FakeThread:
     instances = []
 
@@ -306,3 +314,53 @@ def test_on_play_local_file_ignores_picker_cancel(monkeypatch):
     assert imported_paths == []
     assert started == []
     assert queued == []
+
+
+def test_install_status_item_file_drop_registers_button_callback(monkeypatch):
+    app, _, _ = make_app_stub()
+    button = object()
+    dropped_paths = []
+    install_calls = []
+    app._nsapp = SimpleNamespace(nsstatusitem=FakeStatusItem(button))
+    app._handle_dropped_local_file = dropped_paths.append
+
+    monkeypatch.setattr(
+        app_module,
+        "install_status_item_file_drop",
+        lambda target, callback: install_calls.append((target, callback)),
+    )
+
+    app._install_status_item_file_drop()
+
+    assert len(install_calls) == 1
+    assert install_calls[0][0] is button
+
+    install_calls[0][1]("/tmp/song.mp3")
+    assert dropped_paths == ["/tmp/song.mp3"]
+
+
+def test_install_status_item_file_drop_ignores_missing_button(monkeypatch):
+    app, _, _ = make_app_stub()
+    install_calls = []
+    app._nsapp = SimpleNamespace(nsstatusitem=FakeStatusItem(None))
+
+    monkeypatch.setattr(
+        app_module,
+        "install_status_item_file_drop",
+        lambda target, callback: install_calls.append((target, callback)),
+    )
+
+    app._install_status_item_file_drop()
+
+    assert install_calls == []
+
+
+def test_handle_dropped_local_file_uses_existing_async_import(monkeypatch):
+    app, _, _ = make_app_stub()
+    imported_paths = []
+    app._import_local_file_async = imported_paths.append
+
+    app._handle_dropped_local_file("/tmp/song.mp3")
+    app._handle_dropped_local_file("")
+
+    assert imported_paths == ["/tmp/song.mp3"]
