@@ -6,6 +6,7 @@ from .utils import (
     cache_relpath_for_id,
     log_exception,
     parse_duration,
+    playlist_track_relpath_for_id,
     sanitize_cache_key,
     stable_hash,
 )
@@ -62,7 +63,7 @@ def run_yt_dlp_json(args, timeout):
         return None
 
 
-def track_from_info(info, fallback_url, default_title="Unknown"):
+def track_from_info(info, fallback_url, default_title="Unknown", *, local_path=None):
     source_url = default_source_url(info, fallback_url).strip()
     if not source_url:
         return None
@@ -75,7 +76,7 @@ def track_from_info(info, fallback_url, default_title="Unknown"):
         title=title,
         duration=parse_duration(info.get("duration")),
         source_url=source_url,
-        local_path=cache_relpath_for_id(track_id, title),
+        local_path=local_path or cache_relpath_for_id(track_id, title),
     )
 
 
@@ -87,14 +88,25 @@ def resolve_playlist(url):
     if not isinstance(info, dict):
         return None
 
+    playlist_id = sanitize_cache_key(str(info.get("id") or stable_hash(url)))
+    playlist_title = (info.get("title") or "Playlist").strip() or "Playlist"
     tracks = []
     for index, entry in enumerate(info.get("entries") or []):
         if not isinstance(entry, dict):
             continue
+        raw_track_id = str(entry.get("id") or stable_hash(default_source_url(entry, url)))
+        track_id = sanitize_cache_key(raw_track_id)
+        track_title = (entry.get("title") or f"Track {index + 1}").strip() or f"Track {index + 1}"
         track = track_from_info(
             entry,
             url,
             default_title=f"Track {index + 1}",
+            local_path=playlist_track_relpath_for_id(
+                playlist_id,
+                playlist_title,
+                track_id,
+                track_title,
+            ),
         )
         if track is None:
             continue
@@ -104,11 +116,10 @@ def resolve_playlist(url):
         print(f"yt-dlp returned no playlist entries for {url}")
         return None
 
-    playlist_id = sanitize_cache_key(str(info.get("id") or stable_hash(url)))
     return ResolvedItem(
         kind="playlist",
         id=playlist_id,
-        title=(info.get("title") or "Playlist").strip() or "Playlist",
+        title=playlist_title,
         source_url=default_source_url(info, url) or url,
         tracks=tracks,
     )

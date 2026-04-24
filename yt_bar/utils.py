@@ -34,25 +34,36 @@ def sanitize_cache_key(value):
 
 
 def cache_relpath_for_id(item_id, title=None):
-    legacy_relpath = _legacy_cache_relpath_for_id(item_id)
-    if title is None:
-        return legacy_relpath
+    return _managed_media_relpath_for_id(item_id, title)
 
-    if os.path.exists(absolute_repo_path(legacy_relpath)):
-        return legacy_relpath
 
-    readable_relpath = os.path.join(
-        SONGS_DIR_NAME,
-        _managed_media_filename(item_id, title),
-    )
-    if os.path.exists(absolute_repo_path(readable_relpath)):
+def playlist_cache_dir_relpath(playlist_id, title):
+    directory_name = _managed_media_directory_name(playlist_id, title)
+    readable_relpath = os.path.join(SONGS_DIR_NAME, directory_name)
+    if os.path.isdir(absolute_repo_path(readable_relpath)):
         return readable_relpath
 
-    existing_relpath = _existing_readable_cache_relpath_for_id(item_id)
+    existing_relpath = _existing_playlist_cache_dir_relpath(playlist_id)
     if existing_relpath is not None:
         return existing_relpath
 
     return readable_relpath
+
+
+def playlist_track_relpath_for_id(playlist_id, playlist_title, track_id, track_title):
+    playlist_relpath = _managed_media_relpath_for_id(
+        track_id,
+        track_title,
+        directory=playlist_cache_dir_relpath(playlist_id, playlist_title),
+    )
+    if os.path.exists(absolute_repo_path(playlist_relpath)):
+        return playlist_relpath
+
+    existing_root_relpath = _existing_root_cache_relpath_for_id(track_id)
+    if existing_root_relpath is not None:
+        return existing_root_relpath
+
+    return playlist_relpath
 
 
 def absolute_repo_path(path):
@@ -107,6 +118,10 @@ def _managed_media_filename(item_id, title):
     )
 
 
+def _managed_media_directory_name(item_id, title):
+    return f"{_managed_media_slug(title)}-{stable_hash(str(item_id))[:MANAGED_MEDIA_HASH_LENGTH]}"
+
+
 def _managed_media_slug(title):
     cleaned = SAFE_CACHE_KEY_RE.sub("_", (title or "").strip()).strip("._")
     if len(cleaned) > MANAGED_MEDIA_TITLE_LIMIT:
@@ -114,15 +129,62 @@ def _managed_media_slug(title):
     return cleaned or "Unknown"
 
 
-def _existing_readable_cache_relpath_for_id(item_id):
+def _managed_media_relpath_for_id(item_id, title=None, directory=SONGS_DIR_NAME):
+    legacy_relpath = _legacy_cache_relpath_for_id(item_id)
+    if title is None:
+        if directory == SONGS_DIR_NAME:
+            return legacy_relpath
+        return os.path.join(directory, f"{sanitize_cache_key(item_id)}.opus")
+
+    if directory == SONGS_DIR_NAME and os.path.exists(absolute_repo_path(legacy_relpath)):
+        return legacy_relpath
+
+    readable_relpath = os.path.join(
+        directory,
+        _managed_media_filename(item_id, title),
+    )
+    if os.path.exists(absolute_repo_path(readable_relpath)):
+        return readable_relpath
+
+    existing_relpath = _existing_readable_cache_relpath_for_id(item_id, directory=directory)
+    if existing_relpath is not None:
+        return existing_relpath
+
+    return readable_relpath
+
+
+def _existing_readable_cache_relpath_for_id(item_id, directory=SONGS_DIR_NAME):
     suffix = f"-{stable_hash(str(item_id))[:MANAGED_MEDIA_HASH_LENGTH]}.opus"
+    try:
+        names = sorted(os.listdir(absolute_repo_path(directory)))
+    except OSError:
+        return None
+
+    for name in names:
+        if name.endswith(suffix):
+            path = os.path.join(directory, name)
+            if os.path.isfile(absolute_repo_path(path)):
+                return path
+    return None
+
+
+def _existing_root_cache_relpath_for_id(item_id):
+    legacy_relpath = _legacy_cache_relpath_for_id(item_id)
+    if os.path.exists(absolute_repo_path(legacy_relpath)):
+        return legacy_relpath
+    return _existing_readable_cache_relpath_for_id(item_id)
+
+
+def _existing_playlist_cache_dir_relpath(playlist_id):
+    suffix = f"-{stable_hash(str(playlist_id))[:MANAGED_MEDIA_HASH_LENGTH]}"
     try:
         names = sorted(os.listdir(SONGS_DIR))
     except OSError:
         return None
 
     for name in names:
-        if name.endswith(suffix):
+        path = os.path.join(SONGS_DIR, name)
+        if name.endswith(suffix) and os.path.isdir(path):
             return os.path.join(SONGS_DIR_NAME, name)
     return None
 

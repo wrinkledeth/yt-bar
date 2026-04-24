@@ -49,9 +49,11 @@ class CacheManager:
         os.makedirs(self._songs_dir, exist_ok=True)
 
     def cleanup_partial_cache_files(self):
-        for name in os.listdir(self._songs_dir):
-            if name.endswith(PARTIAL_CACHE_SUFFIX):
-                path = os.path.join(self._songs_dir, name)
+        for root, _dirs, names in os.walk(self._songs_dir):
+            for name in names:
+                if not name.endswith(PARTIAL_CACHE_SUFFIX):
+                    continue
+                path = os.path.join(root, name)
                 try:
                     os.remove(path)
                 except OSError:
@@ -114,6 +116,8 @@ class CacheManager:
 
         if os.path.exists(final_path):
             return True
+
+        os.makedirs(os.path.dirname(final_path), exist_ok=True)
 
         try:
             os.remove(partial_path)

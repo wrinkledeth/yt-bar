@@ -1,5 +1,5 @@
 from yt_bar import resolver
-from yt_bar.utils import cache_relpath_for_id
+from yt_bar.utils import cache_relpath_for_id, playlist_track_relpath_for_id
 
 
 def test_default_source_url_prefers_http_metadata_url():
@@ -79,7 +79,19 @@ def test_resolve_playlist_builds_tracks_and_skips_invalid_entries(monkeypatch):
     assert item.title == "Mix"
     assert item.source_url == "https://example.test/playlist"
     assert [track.id for track in item.tracks] == ["one", "two"]
+    assert item.tracks[0].local_path == playlist_track_relpath_for_id(
+        "playlist-1",
+        "Mix",
+        "one",
+        "First",
+    )
     assert item.tracks[1].title == "Track 3"
+    assert item.tracks[1].local_path == playlist_track_relpath_for_id(
+        "playlist-1",
+        "Mix",
+        "two",
+        "Track 3",
+    )
 
 
 def test_resolve_url_falls_back_to_single_when_playlist_resolution_fails(monkeypatch):

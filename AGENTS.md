@@ -96,7 +96,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - Do not mutate playback state directly from PyObjC callbacks, CoreAudio listeners, or mixer taps; enqueue work back onto `AudioEngine`'s worker.
 - Keep playlist playback hidden from the menu, but preserve ordered auto-advance.
 - Preserve the remote-command fallback where `nextTrackCommand` / `previousTrackCommand` map to the same seek helpers as skip forward/back.
-- Keep `songs/` as the single managed media root; new managed files use readable `.opus` names with stable hash suffixes, and existing files are left in place.
+- Keep `songs/` as the single managed media root; single-item media stays directly under it, playlist imports use readable subfolders, new managed files use readable `.opus` names with stable hash suffixes, and existing files are left in place.
 - Keep changes concentrated in the package module that owns the subsystem; preserve the root `yt_bar.py` shim.
 
 ## Validation

@@ -142,3 +142,52 @@ def test_download_track_cache_removes_partial_on_failure(monkeypatch, tmp_path):
     assert manager._download_track_cache(track) is False
     assert not partial_path.exists()
     assert not tmp_path.joinpath("track.opus").exists()
+
+
+def test_download_track_cache_creates_parent_directory_for_playlist_track(monkeypatch, tmp_path):
+    playlist_dir = tmp_path / "mix"
+    monkeypatch.setattr(
+        "yt_bar.models.partial_cache_abspath_for_path",
+        lambda local_path: str(playlist_dir / "track.partial.opus"),
+    )
+    track = make_track("track", local_path=str(playlist_dir / "track.opus"))
+    manager = CacheManager(
+        is_current_stream_item_active=lambda item, generation: True,
+        refresh_recent_for_cache=lambda item: None,
+        songs_dir=tmp_path,
+        worker_count=0,
+    )
+
+    def fake_run(args, capture_output, text):
+        assert capture_output is True
+        assert text is True
+        assert playlist_dir.is_dir()
+        playlist_dir.joinpath("track.partial.opus").write_bytes(b"audio")
+
+        class Result:
+            returncode = 0
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("yt_bar.cache.subprocess.run", fake_run)
+
+    assert manager._download_track_cache(track) is True
+    assert playlist_dir.joinpath("track.opus").read_bytes() == b"audio"
+
+
+def test_cleanup_partial_cache_files_removes_nested_playlist_partials(tmp_path):
+    nested = tmp_path / "mix"
+    nested.mkdir()
+    partial = nested / "track.partial.opus"
+    partial.write_bytes(b"partial")
+    manager = CacheManager(
+        is_current_stream_item_active=lambda item, generation: True,
+        refresh_recent_for_cache=lambda item: None,
+        songs_dir=tmp_path,
+        worker_count=0,
+    )
+
+    manager.cleanup_partial_cache_files()
+
+    assert not partial.exists()

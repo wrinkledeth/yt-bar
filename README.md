@@ -84,7 +84,7 @@ Additional:
 - The badge next to the song title shows playback source: `◌` means streaming, `●` means local cache.
 - `Settings` lets you toggle `Compact Menu`, change skip interval seconds, and change the recent-list limit.
 - Cached YouTube media, imported local files, the recent list, and settings are stored under `songs/`.
-- New managed media is stored there as `.opus` with readable filenames plus a stable hash suffix; existing files stay in place.
+- Single videos and imported local files stay directly under `songs/` as readable `.opus` filenames with stable hash suffixes. Playlist imports create a readable folder under `songs/` and store the playlist tracks inside it; existing files stay in place.
 
 ## Visualizer Algorithm
 The visualizer is a tiny stereometer rendered as 3 braille characters in the menu bar. 

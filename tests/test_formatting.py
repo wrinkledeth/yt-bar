@@ -5,6 +5,8 @@ from yt_bar.utils import (
     cache_relpath_for_id,
     format_time,
     parse_duration,
+    playlist_cache_dir_relpath,
+    playlist_track_relpath_for_id,
     progress_bar,
     sanitize_cache_key,
     stable_hash,
@@ -52,6 +54,53 @@ def test_cache_relpath_for_id_reuses_existing_same_hash_file(monkeypatch, tmp_pa
     (songs_dir / existing_name).write_bytes(b"cached")
 
     assert cache_relpath_for_id("track-id", "New Title") == f"songs/{existing_name}"
+
+
+def test_playlist_cache_dir_relpath_builds_readable_folder(monkeypatch, tmp_path):
+    songs_dir = tmp_path / "songs"
+    songs_dir.mkdir()
+    monkeypatch.setattr("yt_bar.utils.APP_ROOT", str(tmp_path))
+    monkeypatch.setattr("yt_bar.utils.SONGS_DIR", str(songs_dir))
+
+    assert (
+        playlist_cache_dir_relpath("playlist-id", " Artist / Mix? ")
+        == f"songs/Artist_Mix-{stable_hash('playlist-id')[:8]}"
+    )
+
+
+def test_playlist_cache_dir_relpath_reuses_existing_same_hash_folder(monkeypatch, tmp_path):
+    songs_dir = tmp_path / "songs"
+    songs_dir.mkdir()
+    monkeypatch.setattr("yt_bar.utils.APP_ROOT", str(tmp_path))
+    monkeypatch.setattr("yt_bar.utils.SONGS_DIR", str(songs_dir))
+    existing_name = f"Old_Title-{stable_hash('playlist-id')[:8]}"
+    (songs_dir / existing_name).mkdir()
+
+    assert playlist_cache_dir_relpath("playlist-id", "New Title") == f"songs/{existing_name}"
+
+
+def test_playlist_track_relpath_for_id_uses_playlist_folder(monkeypatch, tmp_path):
+    songs_dir = tmp_path / "songs"
+    songs_dir.mkdir()
+    monkeypatch.setattr("yt_bar.utils.APP_ROOT", str(tmp_path))
+    monkeypatch.setattr("yt_bar.utils.SONGS_DIR", str(songs_dir))
+
+    assert playlist_track_relpath_for_id("playlist-id", "Mix", "track-id", "Song Title") == (
+        f"songs/Mix-{stable_hash('playlist-id')[:8]}/Song_Title-{stable_hash('track-id')[:8]}.opus"
+    )
+
+
+def test_playlist_track_relpath_for_id_reuses_existing_root_cache_file(monkeypatch, tmp_path):
+    songs_dir = tmp_path / "songs"
+    songs_dir.mkdir()
+    monkeypatch.setattr("yt_bar.utils.APP_ROOT", str(tmp_path))
+    monkeypatch.setattr("yt_bar.utils.SONGS_DIR", str(songs_dir))
+    existing_name = f"Old_Title-{stable_hash('track-id')[:8]}.opus"
+    (songs_dir / existing_name).write_bytes(b"cached")
+
+    assert playlist_track_relpath_for_id("playlist-id", "Mix", "track-id", "Song Title") == (
+        f"songs/{existing_name}"
+    )
 
 
 def test_duration_and_time_formatting_handles_bad_and_large_values():
