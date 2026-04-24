@@ -24,6 +24,7 @@ def test_ui_command_factories_create_typed_commands():
 
 def test_menu_action_factories_create_typed_actions():
     assert MenuAction.play_from_clipboard().kind is MenuActionKind.PLAY_FROM_CLIPBOARD
+    assert MenuAction.play_local_file().kind is MenuActionKind.PLAY_LOCAL_FILE
     assert MenuAction.play_pause().kind is MenuActionKind.PLAY_PAUSE
     assert MenuAction.toggle_compact_menu().kind is MenuActionKind.TOGGLE_COMPACT_MENU
     assert MenuAction.recent_menu_will_open().kind is MenuActionKind.RECENT_MENU_WILL_OPEN

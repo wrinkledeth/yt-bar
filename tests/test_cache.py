@@ -83,8 +83,8 @@ def test_start_cache_if_still_current_honors_generation_check(tmp_path):
 
 def test_download_track_cache_renames_partial_on_success(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "yt_bar.models.partial_cache_abspath_for_id",
-        lambda track_id: str(tmp_path / f"{track_id}.partial.opus"),
+        "yt_bar.models.partial_cache_abspath_for_path",
+        lambda local_path: str(tmp_path / "track.partial.opus"),
     )
     track = make_track("track", local_path=str(tmp_path / "track.opus"))
     manager = CacheManager(
@@ -115,8 +115,8 @@ def test_download_track_cache_renames_partial_on_success(monkeypatch, tmp_path):
 
 def test_download_track_cache_removes_partial_on_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "yt_bar.models.partial_cache_abspath_for_id",
-        lambda track_id: str(tmp_path / f"{track_id}.partial.opus"),
+        "yt_bar.models.partial_cache_abspath_for_path",
+        lambda local_path: str(tmp_path / "track.partial.opus"),
     )
     track = make_track("track", local_path=str(tmp_path / "track.opus"))
     partial_path = tmp_path / "track.partial.opus"

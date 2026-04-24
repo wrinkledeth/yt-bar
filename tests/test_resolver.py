@@ -1,4 +1,5 @@
 from yt_bar import resolver
+from yt_bar.utils import cache_relpath_for_id
 
 
 def test_default_source_url_prefers_http_metadata_url():
@@ -19,7 +20,12 @@ def test_default_source_url_rebuilds_youtube_watch_url_from_id():
     assert resolver.default_source_url(info, "") == "https://www.youtube.com/watch?v=abc123"
 
 
-def test_track_from_info_sanitizes_id_and_parses_duration():
+def test_track_from_info_sanitizes_id_and_parses_duration(monkeypatch, tmp_path):
+    songs_dir = tmp_path / "songs"
+    songs_dir.mkdir()
+    monkeypatch.setattr("yt_bar.utils.APP_ROOT", str(tmp_path))
+    monkeypatch.setattr("yt_bar.utils.SONGS_DIR", str(songs_dir))
+
     track = resolver.track_from_info(
         {
             "id": "artist / song?",
@@ -35,7 +41,7 @@ def test_track_from_info_sanitizes_id_and_parses_duration():
     assert track.title == "Example Title"
     assert track.duration == 123.5
     assert track.source_url == "https://example.test/video"
-    assert track.local_path == "songs/artist_song.opus"
+    assert track.local_path == cache_relpath_for_id("artist_song", "Example Title")
 
 
 def test_resolve_playlist_builds_tracks_and_skips_invalid_entries(monkeypatch):

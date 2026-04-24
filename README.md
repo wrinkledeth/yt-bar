@@ -6,6 +6,7 @@
 
 - lives in the menu bar
 - plays tracks from the clipboard
+- imports local audio files for playback
 - supports media keys
 - caches tracks locally for offline playback
 
@@ -73,14 +74,16 @@ Automated tests cover fake-backed menu rendering/action dispatch, clipboard inta
 
 Core:
 - Copy a YouTube video or playlist URL and use `Play from Clipboard`.
+- Use `Play Local File...` to import a local audio file into the app library and play it.
 - Playback starts immediately, and the track is cached locally while you listen.
-- `Recent` lets you replay cached tracks offline.
+- `Recent` lets you replay cached YouTube tracks and imported local files.
 - Use F7 / F8 / F9 media keys to play/pause and skip forward or back.
 
 Additional:
 - The badge next to the song title shows playback source: `◌` means streaming, `●` means local cache.
 - `Settings` lets you toggle `Compact Menu`, change skip interval seconds, and change the recent-list limit.
-- Cached media, the recent list, and settings are stored under `songs/`.
+- Cached YouTube media, imported local files, the recent list, and settings are stored under `songs/`.
+- New managed media is stored there as `.opus` with readable filenames plus a stable hash suffix; existing files stay in place.
 
 ## Visualizer Algorithm
 The visualizer is a tiny stereometer rendered as 3 braille characters in the menu bar. 

@@ -70,6 +70,7 @@ def test_recent_store_loads_valid_entries_by_cache_key(tmp_path):
     assert recent.title == "One"
     assert recent.tracks[0].id == "track_one"
     assert recent.tracks[0].duration == 12.5
+    assert recent.tracks[0].local_path == "songs/one.opus"
 
 
 def test_recent_store_saves_newest_entries_first(tmp_path):

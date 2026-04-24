@@ -76,6 +76,10 @@ class MenuController:
             "Play from Clipboard",
             callback=lambda _: self._dispatch(MenuAction.play_from_clipboard()),
         )
+        self.local_file_item = rumps.MenuItem(
+            "Play Local File...",
+            callback=lambda _: self._dispatch(MenuAction.play_local_file()),
+        )
 
     def _dispatch(self, action):
         self._dispatch_action(action)
@@ -106,6 +110,7 @@ class MenuController:
             self.progress,
             None,
             self.paste_item,
+            self.local_file_item,
             self.recent_menu,
             None,
         ]

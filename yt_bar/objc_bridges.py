@@ -111,3 +111,17 @@ def schedule_common_mode_timer(interval, callback):
     )
     Foundation.NSRunLoop.currentRunLoop().addTimer_forMode_(timer, Foundation.NSRunLoopCommonModes)
     return timer, target
+
+
+def schedule_default_mode_timer_once(delay, callback):
+    target = CommonModeTimerTarget.alloc().initWithCallback_(callback)
+    timer = Foundation.NSTimer.alloc().initWithFireDate_interval_target_selector_userInfo_repeats_(
+        Foundation.NSDate.dateWithTimeIntervalSinceNow_(float(delay)),
+        0.0,
+        target,
+        b"fire:",
+        None,
+        False,
+    )
+    Foundation.NSRunLoop.currentRunLoop().addTimer_forMode_(timer, Foundation.NSDefaultRunLoopMode)
+    return timer, target

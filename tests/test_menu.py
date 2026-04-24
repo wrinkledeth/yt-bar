@@ -113,6 +113,7 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
         controller.progress,
         None,
         controller.paste_item,
+        controller.local_file_item,
         controller.recent_menu,
         None,
         controller.playpause_item,
@@ -137,6 +138,7 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
     assert controller.recent_menu.children["recent_remove_0"]._menuitem.alternate is True
 
     controller.paste_item.callback(None)
+    controller.local_file_item.callback(None)
     controller.playpause_item.callback(None)
     controller.seek_items[3].callback(None)
     controller.recent_menu.children["recent_play_0"].callback(None)
@@ -148,6 +150,7 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
 
     assert actions == [
         MenuAction.play_from_clipboard(),
+        MenuAction.play_local_file(),
         MenuAction.play_pause(),
         MenuAction.seek_percent(30),
         MenuAction.play_recent("video:1"),
@@ -180,6 +183,7 @@ def test_render_builds_compact_menu_and_empty_recent_placeholder(monkeypatch):
         controller.progress,
         None,
         controller.paste_item,
+        controller.local_file_item,
         controller.recent_menu,
         None,
         controller.settings_menu,

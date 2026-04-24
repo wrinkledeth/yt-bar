@@ -14,6 +14,9 @@ from .constants import (
     SONGS_DIR_NAME,
 )
 
+MANAGED_MEDIA_HASH_LENGTH = 8
+MANAGED_MEDIA_TITLE_LIMIT = 48
+
 
 def log_exception(context, exc):
     print(f"{context}: {exc!r}")
@@ -30,8 +33,26 @@ def sanitize_cache_key(value):
     return cleaned or stable_hash(value or "track")
 
 
-def cache_relpath_for_id(item_id):
-    return os.path.join(SONGS_DIR_NAME, f"{sanitize_cache_key(item_id)}.opus")
+def cache_relpath_for_id(item_id, title=None):
+    legacy_relpath = _legacy_cache_relpath_for_id(item_id)
+    if title is None:
+        return legacy_relpath
+
+    if os.path.exists(absolute_repo_path(legacy_relpath)):
+        return legacy_relpath
+
+    readable_relpath = os.path.join(
+        SONGS_DIR_NAME,
+        _managed_media_filename(item_id, title),
+    )
+    if os.path.exists(absolute_repo_path(readable_relpath)):
+        return readable_relpath
+
+    existing_relpath = _existing_readable_cache_relpath_for_id(item_id)
+    if existing_relpath is not None:
+        return existing_relpath
+
+    return readable_relpath
 
 
 def absolute_repo_path(path):
@@ -41,7 +62,13 @@ def absolute_repo_path(path):
 
 
 def partial_cache_abspath_for_id(item_id):
-    return os.path.join(SONGS_DIR, f"{sanitize_cache_key(item_id)}{PARTIAL_CACHE_SUFFIX}")
+    return partial_cache_abspath_for_path(_legacy_cache_relpath_for_id(item_id))
+
+
+def partial_cache_abspath_for_path(local_path):
+    final_path = absolute_repo_path(local_path)
+    stem, _ = os.path.splitext(final_path)
+    return f"{stem}{PARTIAL_CACHE_SUFFIX}"
 
 
 def truncate_title(title, limit=RECENT_TITLE_LIMIT):
@@ -68,6 +95,36 @@ def parse_duration(value):
     except (TypeError, ValueError):
         return 0.0
     return max(0.0, duration)
+
+
+def _legacy_cache_relpath_for_id(item_id):
+    return os.path.join(SONGS_DIR_NAME, f"{sanitize_cache_key(item_id)}.opus")
+
+
+def _managed_media_filename(item_id, title):
+    return (
+        f"{_managed_media_slug(title)}-{stable_hash(str(item_id))[:MANAGED_MEDIA_HASH_LENGTH]}.opus"
+    )
+
+
+def _managed_media_slug(title):
+    cleaned = SAFE_CACHE_KEY_RE.sub("_", (title or "").strip()).strip("._")
+    if len(cleaned) > MANAGED_MEDIA_TITLE_LIMIT:
+        cleaned = cleaned[:MANAGED_MEDIA_TITLE_LIMIT].rstrip("._-")
+    return cleaned or "Unknown"
+
+
+def _existing_readable_cache_relpath_for_id(item_id):
+    suffix = f"-{stable_hash(str(item_id))[:MANAGED_MEDIA_HASH_LENGTH]}.opus"
+    try:
+        names = sorted(os.listdir(SONGS_DIR))
+    except OSError:
+        return None
+
+    for name in names:
+        if name.endswith(suffix):
+            return os.path.join(SONGS_DIR_NAME, name)
+    return None
 
 
 def _set_header_title(menu_item, primary, trailing=None):

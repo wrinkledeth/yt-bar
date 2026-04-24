@@ -20,6 +20,40 @@ def test_cache_key_helpers_are_stable_and_filesystem_safe():
     assert cache_relpath_for_id(" Artist / Song? ") == "songs/Artist_Song.opus"
 
 
+def test_cache_relpath_for_id_builds_readable_name_when_title_is_given(monkeypatch, tmp_path):
+    songs_dir = tmp_path / "songs"
+    songs_dir.mkdir()
+    monkeypatch.setattr("yt_bar.utils.APP_ROOT", str(tmp_path))
+    monkeypatch.setattr("yt_bar.utils.SONGS_DIR", str(songs_dir))
+
+    assert (
+        cache_relpath_for_id("track-id", " Artist / Song? ")
+        == f"songs/Artist_Song-{stable_hash('track-id')[:8]}.opus"
+    )
+
+
+def test_cache_relpath_for_id_prefers_existing_legacy_file(monkeypatch, tmp_path):
+    songs_dir = tmp_path / "songs"
+    songs_dir.mkdir()
+    monkeypatch.setattr("yt_bar.utils.APP_ROOT", str(tmp_path))
+    monkeypatch.setattr("yt_bar.utils.SONGS_DIR", str(songs_dir))
+    legacy_path = songs_dir / "track-id.opus"
+    legacy_path.write_bytes(b"legacy")
+
+    assert cache_relpath_for_id("track-id", "Readable Title") == "songs/track-id.opus"
+
+
+def test_cache_relpath_for_id_reuses_existing_same_hash_file(monkeypatch, tmp_path):
+    songs_dir = tmp_path / "songs"
+    songs_dir.mkdir()
+    monkeypatch.setattr("yt_bar.utils.APP_ROOT", str(tmp_path))
+    monkeypatch.setattr("yt_bar.utils.SONGS_DIR", str(songs_dir))
+    existing_name = f"Old_Title-{stable_hash('track-id')[:8]}.opus"
+    (songs_dir / existing_name).write_bytes(b"cached")
+
+    assert cache_relpath_for_id("track-id", "New Title") == f"songs/{existing_name}"
+
+
 def test_duration_and_time_formatting_handles_bad_and_large_values():
     assert parse_duration("12.5") == 12.5
     assert parse_duration("-2") == 0.0

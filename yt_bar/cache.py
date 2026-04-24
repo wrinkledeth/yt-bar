@@ -110,7 +110,7 @@ class CacheManager:
     def _download_track_cache(self, track):
         final_path = track.absolute_local_path
         partial_path = track.partial_local_path
-        output_template = os.path.join(self._songs_dir, f"{track.id}.partial.%(ext)s")
+        output_template = f"{os.path.splitext(partial_path)[0]}.%(ext)s"
 
         if os.path.exists(final_path):
             return True

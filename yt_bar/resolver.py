@@ -69,12 +69,13 @@ def track_from_info(info, fallback_url, default_title="Unknown"):
 
     raw_id = str(info.get("id") or stable_hash(source_url))
     track_id = sanitize_cache_key(raw_id)
+    title = (info.get("title") or default_title).strip() or default_title
     return TrackInfo(
         id=track_id,
-        title=(info.get("title") or default_title).strip() or default_title,
+        title=title,
         duration=parse_duration(info.get("duration")),
         source_url=source_url,
-        local_path=cache_relpath_for_id(track_id),
+        local_path=cache_relpath_for_id(track_id, title),
     )
 
 

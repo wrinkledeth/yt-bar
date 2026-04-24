@@ -10,7 +10,7 @@ from .utils import (
     absolute_repo_path,
     cache_relpath_for_id,
     parse_duration,
-    partial_cache_abspath_for_id,
+    partial_cache_abspath_for_path,
     sanitize_cache_key,
     stable_hash,
 )
@@ -65,6 +65,7 @@ class UICommand:
 
 class MenuActionKind(Enum):
     PLAY_FROM_CLIPBOARD = "play_from_clipboard"
+    PLAY_LOCAL_FILE = "play_local_file"
     PLAY_PAUSE = "play_pause"
     SEEK_PERCENT = "seek_percent"
     PLAY_RECENT = "play_recent"
@@ -86,6 +87,10 @@ class MenuAction:
     @classmethod
     def play_from_clipboard(cls):
         return cls(MenuActionKind.PLAY_FROM_CLIPBOARD)
+
+    @classmethod
+    def play_local_file(cls):
+        return cls(MenuActionKind.PLAY_LOCAL_FILE)
 
     @classmethod
     def play_pause(cls):
@@ -255,7 +260,7 @@ class TrackInfo:
 
     @property
     def partial_local_path(self):
-        return partial_cache_abspath_for_id(self.id)
+        return partial_cache_abspath_for_path(self.local_path)
 
     def is_cached(self):
         return os.path.exists(self.absolute_local_path)

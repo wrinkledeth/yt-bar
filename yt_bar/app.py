@@ -8,6 +8,7 @@ import rumps
 from .audio_engine import AudioEngine
 from .cache import CacheManager
 from .constants import PAUSE_TITLE
+from .local_media import import_local_file
 from .menu import MenuController
 from .models import (
     MenuAction,
@@ -16,7 +17,7 @@ from .models import (
     UICommand,
     UICommandKind,
 )
-from .objc_bridges import schedule_common_mode_timer
+from .objc_bridges import schedule_common_mode_timer, schedule_default_mode_timer_once
 from .playback import LOCAL_PLAYBACK_MODE, PlaybackController
 from .recent import RecentController
 from .remote_commands import RemoteCommandController
@@ -41,6 +42,10 @@ class YTBar(rumps.App):
         self._progress_duration = None
         self._pending_actions = deque()
         self._cleanup_done = False
+        self._local_file_panel = None
+        self._local_file_picker_timer = None
+        self._local_file_picker_timer_target = None
+        self._local_file_panel_activation_policy = None
 
         self.settings_store = SettingsStore()
         self.recent = RecentController()
@@ -257,6 +262,8 @@ class YTBar(rumps.App):
     def _handle_menu_action(self, action: MenuAction):
         if action.kind is MenuActionKind.PLAY_FROM_CLIPBOARD:
             self.on_paste_url(None)
+        elif action.kind is MenuActionKind.PLAY_LOCAL_FILE:
+            self.on_play_local_file(None)
         elif action.kind is MenuActionKind.PLAY_PAUSE:
             self.on_playpause(None)
         elif action.kind is MenuActionKind.SEEK_PERCENT and action.percent is not None:
@@ -363,6 +370,64 @@ class YTBar(rumps.App):
         pb = AppKit.NSPasteboard.generalPasteboard()
         return pb.stringForType_(AppKit.NSStringPboardType) or ""
 
+    def _configure_local_file_panel(self):
+        panel = AppKit.NSOpenPanel.openPanel()
+        panel.setCanChooseFiles_(True)
+        panel.setCanChooseDirectories_(False)
+        panel.setAllowsMultipleSelection_(False)
+        panel.setResolvesAliases_(True)
+        return panel
+
+    def _activate_app_for_panel(self):
+        app = AppKit.NSApplication.sharedApplication()
+        if app is not None:
+            self._local_file_panel_activation_policy = app.activationPolicy()
+            app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
+            app.activateIgnoringOtherApps_(True)
+
+    def _restore_app_after_panel(self):
+        app = AppKit.NSApplication.sharedApplication()
+        policy = self._local_file_panel_activation_policy
+        self._local_file_panel_activation_policy = None
+        if app is not None and policy is not None:
+            app.setActivationPolicy_(policy)
+
+    def _present_local_file_picker(self, _=None):
+        self._local_file_picker_timer = None
+        self._local_file_picker_timer_target = None
+        if self._local_file_panel is not None:
+            return
+
+        panel = self._configure_local_file_panel()
+        self._local_file_panel = panel
+        self._activate_app_for_panel()
+
+        ok_response = getattr(
+            AppKit,
+            "NSModalResponseOK",
+            getattr(AppKit, "NSFileHandlingPanelOKButton", 1),
+        )
+
+        def _handle_response(response):
+            self._local_file_panel = None
+            self._restore_app_after_panel()
+            if response != ok_response:
+                return
+
+            url = panel.URL()
+            if url is None:
+                return
+
+            source_path = url.path() or ""
+            if not source_path:
+                return
+
+            self._import_local_file_async(source_path)
+
+        panel.beginWithCompletionHandler_(_handle_response)
+        panel.makeKeyAndOrderFront_(None)
+        panel.orderFrontRegardless()
+
     def _record_item_played(self, item, *, last_played=None):
         self.recent.record_item_played(item, last_played=last_played)
 
@@ -406,6 +471,26 @@ class YTBar(rumps.App):
             self._start_item_playback(item, playback_mode=playback_mode)
 
         threading.Thread(target=_resolve_and_play, daemon=True).start()
+
+    def _import_local_file_async(self, source_path):
+        def _import_and_play():
+            item = import_local_file(source_path)
+            if item is None:
+                if not self.engine.is_active:
+                    self._enqueue_ui_action(UICommand.stopped())
+                return
+
+            self._start_item_playback(item, playback_mode=LOCAL_PLAYBACK_MODE)
+
+        threading.Thread(target=_import_and_play, daemon=True).start()
+
+    def on_play_local_file(self, _):
+        if self._local_file_picker_timer is not None or self._local_file_panel is not None:
+            return
+
+        self._local_file_picker_timer, self._local_file_picker_timer_target = (
+            schedule_default_mode_timer_once(0.0, self._present_local_file_picker)
+        )
 
     def on_playpause(self, _):
         self._toggle_play_pause()
