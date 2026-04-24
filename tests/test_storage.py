@@ -24,15 +24,47 @@ def test_settings_store_loads_defaults_for_missing_and_invalid_values(tmp_path):
     assert SettingsStore(path).load() == Settings()
 
 
+def test_settings_store_loads_legacy_compact_menu_as_hidden_transport_items(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "compact_menu": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert SettingsStore(path).load() == Settings(
+        show_play_pause=False,
+        show_seek=False,
+        show_songs=False,
+    )
+
+
 def test_settings_store_round_trips_valid_settings(tmp_path):
     path = tmp_path / "settings.json"
     store = SettingsStore(path)
-    settings = Settings(skip_interval_seconds=60.0, recent_menu_limit=20, compact_menu=True)
+    settings = Settings(
+        skip_interval_seconds=60.0,
+        recent_menu_limit=20,
+        show_play_pause=False,
+        show_seek=True,
+        show_songs=False,
+    )
 
     store.save(settings)
 
     assert store.load() == settings
     assert not os.path.exists(f"{path}.tmp")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload == {
+        "skip_interval_seconds": 60.0,
+        "recent_menu_limit": 20,
+        "show_play_pause": False,
+        "show_seek": True,
+        "show_songs": False,
+    }
 
 
 def test_recent_store_loads_valid_entries_by_cache_key(tmp_path):

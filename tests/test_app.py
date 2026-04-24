@@ -263,7 +263,9 @@ def make_app_stub():
     app._now_playing_playback_mode = None
     app._progress_elapsed = None
     app._progress_duration = None
-    app._compact_menu = False
+    app._show_play_pause = True
+    app._show_seek = True
+    app._show_songs = True
     app._skip_interval = 30.0
     app._recent_limit = 10
     app._render_menu = lambda: None
@@ -452,6 +454,9 @@ def test_menu_snapshot_includes_song_picker_state():
     app._now_playing_playback_mode = "stream"
     app._progress_elapsed = 12.5
     app._progress_duration = 100.0
+    app._show_play_pause = False
+    app._show_seek = True
+    app._show_songs = False
     app._skip_interval = 45.0
     app._recent_limit = 5
     app.playback = SimpleNamespace(
@@ -477,6 +482,9 @@ def test_menu_snapshot_includes_song_picker_state():
 
     snapshot = app._menu_snapshot()
 
+    assert snapshot.show_play_pause is False
+    assert snapshot.show_seek is True
+    assert snapshot.show_songs is False
     assert snapshot.song_picker_enabled is True
     assert snapshot.song_picker_entries == (
         MenuPlaylistTrackEntry(index=0, title="Track One"),
@@ -498,6 +506,36 @@ def test_song_picker_action_starts_selected_playlist_track():
 
     assert play_calls == [(1, 0, False)]
     assert render_calls == ["render"]
+
+
+def test_transport_visibility_actions_toggle_settings():
+    app, _, _ = make_app_stub()
+    save_calls = []
+    render_calls = []
+    app._save_settings = lambda: save_calls.append(
+        (app._show_play_pause, app._show_seek, app._show_songs)
+    )
+    app._render_menu = lambda: render_calls.append(
+        (app._show_play_pause, app._show_seek, app._show_songs)
+    )
+
+    app._handle_menu_action(MenuAction.toggle_show_play_pause())
+    app._handle_menu_action(MenuAction.toggle_show_seek())
+    app._handle_menu_action(MenuAction.toggle_show_songs())
+
+    assert save_calls == [
+        (False, True, True),
+        (False, False, True),
+        (False, False, False),
+    ]
+    assert render_calls == [
+        (False, True, True),
+        (False, True, True),
+        (False, False, True),
+        (False, False, True),
+        (False, False, False),
+        (False, False, False),
+    ]
 
 
 def test_rename_recent_action_prompts_and_saves_override(monkeypatch):

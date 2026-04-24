@@ -120,7 +120,9 @@ class YTBar(rumps.App):
             active=self.engine.is_active,
             paused=self.engine.is_paused,
             has_current_track=self.playback.has_current_track(),
-            compact_menu=self._compact_menu,
+            show_play_pause=self._show_play_pause,
+            show_seek=self._show_seek,
+            show_songs=self._show_songs,
             skip_interval=self._skip_interval,
             recent_limit=self._recent_limit,
             song_picker_enabled=bool(song_picker_entries),
@@ -141,19 +143,33 @@ class YTBar(rumps.App):
         settings = self.settings_store.load()
         self._skip_interval = settings.skip_interval_seconds
         self._recent_limit = settings.recent_menu_limit
-        self._compact_menu = settings.compact_menu
+        self._show_play_pause = settings.show_play_pause
+        self._show_seek = settings.show_seek
+        self._show_songs = settings.show_songs
 
     def _save_settings(self):
         self.settings_store.save(
             Settings(
                 skip_interval_seconds=self._skip_interval,
                 recent_menu_limit=self._recent_limit,
-                compact_menu=self._compact_menu,
+                show_play_pause=self._show_play_pause,
+                show_seek=self._show_seek,
+                show_songs=self._show_songs,
             )
         )
 
-    def _on_compact_menu_toggled(self, _=None):
-        self._compact_menu = not self._compact_menu
+    def _on_show_play_pause_toggled(self, _=None):
+        self._show_play_pause = not self._show_play_pause
+        self._save_settings()
+        self._render_menu()
+
+    def _on_show_seek_toggled(self, _=None):
+        self._show_seek = not self._show_seek
+        self._save_settings()
+        self._render_menu()
+
+    def _on_show_songs_toggled(self, _=None):
+        self._show_songs = not self._show_songs
         self._save_settings()
         self._render_menu()
 
@@ -345,8 +361,12 @@ class YTBar(rumps.App):
             self._rename_recent_entry(action.cache_key)
         elif action.kind is MenuActionKind.REMOVE_RECENT and action.cache_key is not None:
             self._remove_recent_entry(action.cache_key)
-        elif action.kind is MenuActionKind.TOGGLE_COMPACT_MENU:
-            self._on_compact_menu_toggled()
+        elif action.kind is MenuActionKind.TOGGLE_SHOW_PLAY_PAUSE:
+            self._on_show_play_pause_toggled()
+        elif action.kind is MenuActionKind.TOGGLE_SHOW_SEEK:
+            self._on_show_seek_toggled()
+        elif action.kind is MenuActionKind.TOGGLE_SHOW_SONGS:
+            self._on_show_songs_toggled()
         elif action.kind is MenuActionKind.SET_SKIP_INTERVAL and action.seconds is not None:
             self._on_skip_changed(action.seconds)
         elif action.kind is MenuActionKind.SET_RECENT_LIMIT and action.recent_limit is not None:

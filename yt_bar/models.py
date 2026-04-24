@@ -72,7 +72,9 @@ class MenuActionKind(Enum):
     PLAY_RECENT = "play_recent"
     RENAME_RECENT = "rename_recent"
     REMOVE_RECENT = "remove_recent"
-    TOGGLE_COMPACT_MENU = "toggle_compact_menu"
+    TOGGLE_SHOW_PLAY_PAUSE = "toggle_show_play_pause"
+    TOGGLE_SHOW_SEEK = "toggle_show_seek"
+    TOGGLE_SHOW_SONGS = "toggle_show_songs"
     SET_SKIP_INTERVAL = "set_skip_interval"
     SET_RECENT_LIMIT = "set_recent_limit"
     RECENT_MENU_WILL_OPEN = "recent_menu_will_open"
@@ -120,8 +122,16 @@ class MenuAction:
         return cls(MenuActionKind.REMOVE_RECENT, cache_key=str(cache_key))
 
     @classmethod
-    def toggle_compact_menu(cls):
-        return cls(MenuActionKind.TOGGLE_COMPACT_MENU)
+    def toggle_show_play_pause(cls):
+        return cls(MenuActionKind.TOGGLE_SHOW_PLAY_PAUSE)
+
+    @classmethod
+    def toggle_show_seek(cls):
+        return cls(MenuActionKind.TOGGLE_SHOW_SEEK)
+
+    @classmethod
+    def toggle_show_songs(cls):
+        return cls(MenuActionKind.TOGGLE_SHOW_SONGS)
 
     @classmethod
     def set_skip_interval(cls, seconds):
@@ -157,7 +167,9 @@ class MenuSnapshot:
     active: bool = False
     paused: bool = False
     has_current_track: bool = False
-    compact_menu: bool = False
+    show_play_pause: bool = True
+    show_seek: bool = True
+    show_songs: bool = True
     skip_interval: float = 30.0
     recent_limit: int = 10
     song_picker_enabled: bool = False

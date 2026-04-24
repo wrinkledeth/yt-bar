@@ -16,7 +16,7 @@ class MenuController:
         self._dispatch_action = dispatch_action
         self._apply_layout = apply_layout
         self._recent_menu_observer = None
-        self._last_compact_menu = None
+        self._last_layout_visibility = None
         self._last_recent_entries = None
         self._last_song_picker_enabled = None
         self._last_song_picker_entries = None
@@ -46,9 +46,17 @@ class MenuController:
         self.song_picker_menu = rumps.MenuItem("Songs")
         self.recent_menu = rumps.MenuItem("Recent")
         self.settings_menu = rumps.MenuItem("Settings")
-        self.compact_menu_item = rumps.MenuItem(
-            "Compact Menu",
-            callback=lambda _: self._dispatch(MenuAction.toggle_compact_menu()),
+        self.show_play_pause_item = rumps.MenuItem(
+            "Show Play / Pause",
+            callback=lambda _: self._dispatch(MenuAction.toggle_show_play_pause()),
+        )
+        self.show_seek_item = rumps.MenuItem(
+            "Show Seek",
+            callback=lambda _: self._dispatch(MenuAction.toggle_show_seek()),
+        )
+        self.show_songs_item = rumps.MenuItem(
+            "Show Songs",
+            callback=lambda _: self._dispatch(MenuAction.toggle_show_songs()),
         )
         self.skip_menu = rumps.MenuItem("Skip Interval")
         self.skip_items: dict[float, rumps.MenuItem] = {}
@@ -72,7 +80,9 @@ class MenuController:
             self.recent_size_items[value] = item
             self.recent_size_menu[label] = item
 
-        self.settings_menu["Compact Menu"] = self.compact_menu_item
+        self.settings_menu["Show Play / Pause"] = self.show_play_pause_item
+        self.settings_menu["Show Seek"] = self.show_seek_item
+        self.settings_menu["Show Songs"] = self.show_songs_item
         self.settings_menu["Skip Interval"] = self.skip_menu
         self.settings_menu["Recent List Size"] = self.recent_size_menu
         self.paste_item = rumps.MenuItem(
@@ -107,7 +117,12 @@ class MenuController:
         self.set_progress_display(snapshot)
 
     def apply_layout(self, snapshot: MenuSnapshot):
-        if self._last_compact_menu == snapshot.compact_menu:
+        layout_visibility = (
+            snapshot.show_play_pause,
+            snapshot.show_seek,
+            snapshot.show_songs,
+        )
+        if self._last_layout_visibility == layout_visibility:
             return
         layout = [
             self.now_playing,
@@ -116,20 +131,21 @@ class MenuController:
             self.paste_item,
             self.local_file_item,
             self.recent_menu,
-            None,
         ]
-        if not snapshot.compact_menu:
-            layout.extend(
-                [
-                    self.playpause_item,
-                    self.seek_menu,
-                    self.song_picker_menu,
-                    None,
-                ]
-            )
+        transport_items = []
+        if snapshot.show_play_pause:
+            transport_items.append(self.playpause_item)
+        if snapshot.show_seek:
+            transport_items.append(self.seek_menu)
+        if snapshot.show_songs:
+            transport_items.append(self.song_picker_menu)
+        layout.append(None)
+        if transport_items:
+            layout.extend(transport_items)
+            layout.append(None)
         layout.append(self.settings_menu)
         self._apply_layout(layout)
-        self._last_compact_menu = snapshot.compact_menu
+        self._last_layout_visibility = layout_visibility
         self.install_recent_menu_delegate()
 
     def refresh_playback_items(self, snapshot: MenuSnapshot):
@@ -168,7 +184,9 @@ class MenuController:
         self._recent_menu_observer = observer
 
     def apply_settings_check_marks(self, snapshot: MenuSnapshot):
-        self.compact_menu_item.state = 1 if snapshot.compact_menu else 0
+        self.show_play_pause_item.state = 1 if snapshot.show_play_pause else 0
+        self.show_seek_item.state = 1 if snapshot.show_seek else 0
+        self.show_songs_item.state = 1 if snapshot.show_songs else 0
         for seconds, item in self.skip_items.items():
             item.state = 1 if seconds == snapshot.skip_interval else 0
         for value, item in self.recent_size_items.items():

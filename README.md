@@ -78,12 +78,12 @@ Core:
 - Or drag a local audio file onto the menu bar item to import and play it.
 - Playback starts immediately, and the track is cached locally while you listen.
 - `Recent` lets you replay cached YouTube tracks and imported local files. Hold `Option` to remove an entry or `Option` + `Shift` to rename its label.
-- `Songs` in the full menu lets you jump to any track in the currently loaded multi-track playlist and continue forward from there.
+- `Songs`, when shown, lets you jump to any track in the currently loaded multi-track playlist and continue forward from there.
 - Use F7 / F8 / F9 media keys to play/pause and skip forward or back.
 
 Additional:
 - The badge next to the song title shows playback source: `◌` means streaming, `●` means local cache.
-- `Settings` lets you toggle `Compact Menu`, change skip interval seconds, and change the recent-list limit.
+- `Settings` lets you show or hide `Songs`, `Play / Pause`, and `Seek`, change skip interval seconds, and change the recent-list limit.
 - Cached YouTube media, imported local files, the recent list, and settings are stored under `songs/`.
 - Single videos and imported local files stay directly under `songs/` as readable `.opus` filenames with stable hash suffixes. Playlist imports create a readable folder under `songs/` and store the playlist tracks inside it; existing files stay in place.
 

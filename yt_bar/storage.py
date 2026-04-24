@@ -18,7 +18,9 @@ from .utils import log_exception
 class Settings:
     skip_interval_seconds: float = DEFAULT_SKIP_INTERVAL_SECONDS
     recent_menu_limit: int = DEFAULT_RECENT_MENU_LIMIT
-    compact_menu: bool = False
+    show_play_pause: bool = True
+    show_seek: bool = True
+    show_songs: bool = True
 
 
 class SettingsStore:
@@ -49,8 +51,27 @@ class SettingsStore:
             settings.recent_menu_limit = limit
 
         compact = payload.get("compact_menu")
+        legacy_visibility = None
         if isinstance(compact, bool):
-            settings.compact_menu = compact
+            legacy_visibility = not compact
+
+        show_play_pause = payload.get("show_play_pause")
+        if isinstance(show_play_pause, bool):
+            settings.show_play_pause = show_play_pause
+        elif legacy_visibility is not None:
+            settings.show_play_pause = legacy_visibility
+
+        show_seek = payload.get("show_seek")
+        if isinstance(show_seek, bool):
+            settings.show_seek = show_seek
+        elif legacy_visibility is not None:
+            settings.show_seek = legacy_visibility
+
+        show_songs = payload.get("show_songs")
+        if isinstance(show_songs, bool):
+            settings.show_songs = show_songs
+        elif legacy_visibility is not None:
+            settings.show_songs = legacy_visibility
 
         return settings
 
@@ -58,7 +79,9 @@ class SettingsStore:
         payload = {
             "skip_interval_seconds": settings.skip_interval_seconds,
             "recent_menu_limit": settings.recent_menu_limit,
-            "compact_menu": settings.compact_menu,
+            "show_play_pause": settings.show_play_pause,
+            "show_seek": settings.show_seek,
+            "show_songs": settings.show_songs,
         }
         tmp_path = f"{self.path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as handle:
