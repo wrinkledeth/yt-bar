@@ -295,8 +295,8 @@ def test_on_paste_url_resolves_clipboard_url_and_starts_playback(monkeypatch):
     monkeypatch.setattr(app_module.threading, "Thread", FakeThread)
     monkeypatch.setattr(
         app_module,
-        "resolve_url",
-        lambda url: resolved_urls.append(url) or item,
+        "resolve_url_result",
+        lambda url: resolved_urls.append(url) or SimpleNamespace(item=item, error_text=None),
     )
 
     app.on_paste_url(None)
@@ -319,7 +319,7 @@ def test_on_paste_url_ignores_non_http_clipboard_content(monkeypatch):
     monkeypatch.setattr(app_module.threading, "Thread", FakeThread)
     monkeypatch.setattr(
         app_module,
-        "resolve_url",
+        "resolve_url_result",
         lambda url: resolved_urls.append(url),
     )
 
@@ -335,15 +335,73 @@ def test_on_paste_url_enqueues_stopped_when_resolution_fails_and_engine_is_idle(
     app, queued, started = make_app_stub()
     install_clipboard(monkeypatch, "https://example.test/missing")
     FakeThread.instances = []
+    error_text = "ERROR: [youtube] Sign in to confirm you're not a bot"
 
     monkeypatch.setattr(app_module.threading, "Thread", FakeThread)
-    monkeypatch.setattr(app_module, "resolve_url", lambda url: None)
+    monkeypatch.setattr(
+        app_module,
+        "resolve_url_result",
+        lambda url: SimpleNamespace(item=None, error_text=error_text),
+    )
 
     app.on_paste_url(None)
 
     assert started == []
-    assert queued == [UICommand.stopped()]
+    assert queued == [
+        UICommand.notify(
+            "Clipboard Play Failed",
+            "YouTube blocked resolution",
+            error_text,
+        ),
+        UICommand.stopped(),
+    ]
     assert len(FakeThread.instances) == 1
+
+
+def test_on_paste_url_notifies_without_stopping_when_resolution_fails_during_playback(monkeypatch):
+    app, queued, started = make_app_stub()
+    app.engine = SimpleNamespace(is_active=True, is_paused=False)
+    install_clipboard(monkeypatch, "https://example.test/missing")
+    FakeThread.instances = []
+    error_text = "temporary resolver failure"
+
+    monkeypatch.setattr(app_module.threading, "Thread", FakeThread)
+    monkeypatch.setattr(
+        app_module,
+        "resolve_url_result",
+        lambda url: SimpleNamespace(item=None, error_text=error_text),
+    )
+
+    app.on_paste_url(None)
+
+    assert started == []
+    assert queued == [
+        UICommand.notify(
+            "Clipboard Play Failed",
+            "Couldn't resolve URL",
+            error_text,
+        )
+    ]
+    assert len(FakeThread.instances) == 1
+
+
+def test_perform_ui_action_sends_notification(monkeypatch):
+    app, _, _ = make_app_stub()
+    notifications = []
+
+    monkeypatch.setattr(
+        app_module,
+        "rumps",
+        SimpleNamespace(
+            notification=lambda title, subtitle, message: notifications.append(
+                (title, subtitle, message)
+            )
+        ),
+    )
+
+    app._perform_ui_action(UICommand.notify("Clipboard Play Failed", "Subtitle", "Message"))
+
+    assert notifications == [("Clipboard Play Failed", "Subtitle", "Message")]
 
 
 def test_on_play_local_file_imports_selection_and_starts_playback(monkeypatch):
@@ -535,6 +593,35 @@ def test_transport_visibility_actions_toggle_settings():
         (False, False, True),
         (False, False, False),
         (False, False, False),
+    ]
+
+
+def test_compact_menu_action_toggles_all_transport_visibility_flags():
+    app, _, _ = make_app_stub()
+    save_calls = []
+    render_calls = []
+    app._show_play_pause = True
+    app._show_seek = False
+    app._show_songs = True
+    app._save_settings = lambda: save_calls.append(
+        (app._show_play_pause, app._show_seek, app._show_songs)
+    )
+    app._render_menu = lambda: render_calls.append(
+        (app._show_play_pause, app._show_seek, app._show_songs)
+    )
+
+    app._handle_menu_action(MenuAction.toggle_compact_menu())
+    app._handle_menu_action(MenuAction.toggle_compact_menu())
+
+    assert save_calls == [
+        (False, False, False),
+        (True, True, True),
+    ]
+    assert render_calls == [
+        (False, False, False),
+        (False, False, False),
+        (True, True, True),
+        (True, True, True),
     ]
 
 

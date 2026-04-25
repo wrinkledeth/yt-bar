@@ -1,5 +1,7 @@
 import json
 import subprocess
+import sys
+from dataclasses import dataclass
 
 from .models import ResolvedItem, TrackInfo
 from .utils import (
@@ -10,6 +12,12 @@ from .utils import (
     sanitize_cache_key,
     stable_hash,
 )
+
+
+@dataclass(frozen=True)
+class ResolveResult:
+    item: ResolvedItem | None
+    error_text: str | None = None
 
 
 def default_source_url(info, fallback_url=""):
@@ -39,7 +47,7 @@ def is_playlist_url(url):
     return "list=" in url or "/playlist" in url
 
 
-def run_yt_dlp_json(args, timeout):
+def _run_yt_dlp_json_result(args, timeout):
     try:
         result = subprocess.run(
             args,
@@ -48,19 +56,25 @@ def run_yt_dlp_json(args, timeout):
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        print(f"yt-dlp timed out while resolving {args[-1]}")
-        return None
+        error_text = f"yt-dlp timed out while resolving {args[-1]}"
+        print(error_text, file=sys.stderr, flush=True)
+        return None, error_text
 
     if result.returncode != 0:
         error_text = result.stderr.strip() or "unknown yt-dlp failure"
-        print(f"yt-dlp failed for {args[-1]}: {error_text}")
-        return None
+        print(f"yt-dlp failed for {args[-1]}: {error_text}", file=sys.stderr, flush=True)
+        return None, error_text
 
     try:
-        return json.loads(result.stdout)
+        return json.loads(result.stdout), None
     except json.JSONDecodeError as exc:
         log_exception("yt-dlp JSON parse failure", exc)
-        return None
+        return None, "yt-dlp returned invalid JSON"
+
+
+def run_yt_dlp_json(args, timeout):
+    info, _error_text = _run_yt_dlp_json_result(args, timeout)
+    return info
 
 
 def track_from_info(info, fallback_url, default_title="Unknown", *, local_path=None):
@@ -80,11 +94,7 @@ def track_from_info(info, fallback_url, default_title="Unknown", *, local_path=N
     )
 
 
-def resolve_playlist(url):
-    info = run_yt_dlp_json(
-        ["yt-dlp", "-J", "--flat-playlist", "--no-warnings", url],
-        timeout=60,
-    )
+def _playlist_item_from_info(info, url):
     if not isinstance(info, dict):
         return None
 
@@ -125,11 +135,7 @@ def resolve_playlist(url):
     )
 
 
-def resolve_single(url):
-    info = run_yt_dlp_json(
-        ["yt-dlp", "-J", "--no-playlist", "--no-warnings", url],
-        timeout=30,
-    )
+def _single_item_from_info(info, url):
     if not isinstance(info, dict):
         return None
 
@@ -144,6 +150,59 @@ def resolve_single(url):
         source_url=track.source_url,
         tracks=[track],
     )
+
+
+def resolve_playlist_result(url):
+    info, error_text = _run_yt_dlp_json_result(
+        ["yt-dlp", "-J", "--flat-playlist", "--no-warnings", url],
+        timeout=60,
+    )
+    item = _playlist_item_from_info(info, url)
+    if item is not None:
+        return ResolveResult(item)
+    return ResolveResult(None, error_text or "yt-dlp returned no playlist entries")
+
+
+def resolve_playlist(url):
+    info = run_yt_dlp_json(
+        ["yt-dlp", "-J", "--flat-playlist", "--no-warnings", url],
+        timeout=60,
+    )
+    return _playlist_item_from_info(info, url)
+
+
+def resolve_single_result(url):
+    info, error_text = _run_yt_dlp_json_result(
+        ["yt-dlp", "-J", "--no-playlist", "--no-warnings", url],
+        timeout=30,
+    )
+    item = _single_item_from_info(info, url)
+    if item is not None:
+        return ResolveResult(item)
+    return ResolveResult(None, error_text or "yt-dlp returned no playable item")
+
+
+def resolve_single(url):
+    info = run_yt_dlp_json(
+        ["yt-dlp", "-J", "--no-playlist", "--no-warnings", url],
+        timeout=30,
+    )
+    return _single_item_from_info(info, url)
+
+
+def resolve_url_result(url):
+    if is_playlist_url(url):
+        playlist_result = resolve_playlist_result(url)
+        if playlist_result.item is not None:
+            return playlist_result
+
+        single_result = resolve_single_result(url)
+        if single_result.item is not None:
+            return single_result
+
+        return ResolveResult(None, single_result.error_text or playlist_result.error_text)
+
+    return resolve_single_result(url)
 
 
 def resolve_url(url):

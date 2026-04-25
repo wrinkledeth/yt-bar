@@ -113,3 +113,60 @@ def test_resolve_url_falls_back_to_single_when_playlist_resolution_fails(monkeyp
         ("playlist", "https://example.test/watch?v=1&list=abc"),
         ("single", "https://example.test/watch?v=1&list=abc"),
     ]
+
+
+def test_resolve_single_result_carries_yt_dlp_error(monkeypatch):
+    def fake_run(args, timeout):
+        assert args[:4] == ["yt-dlp", "-J", "--no-playlist", "--no-warnings"]
+        assert timeout == 30
+        return None, "Sign in to confirm you're not a bot"
+
+    monkeypatch.setattr(resolver, "_run_yt_dlp_json_result", fake_run)
+
+    result = resolver.resolve_single_result("https://example.test/watch?v=1")
+
+    assert result.item is None
+    assert result.error_text == "Sign in to confirm you're not a bot"
+
+
+def test_resolve_url_result_uses_single_result_after_playlist_failure(monkeypatch):
+    calls = []
+    item = object()
+
+    def fake_playlist(url):
+        calls.append(("playlist", url))
+        return resolver.ResolveResult(None, "playlist blocked")
+
+    def fake_single(url):
+        calls.append(("single", url))
+        return resolver.ResolveResult(item)
+
+    monkeypatch.setattr(resolver, "resolve_playlist_result", fake_playlist)
+    monkeypatch.setattr(resolver, "resolve_single_result", fake_single)
+
+    result = resolver.resolve_url_result("https://example.test/watch?v=1&list=abc")
+
+    assert result.item is item
+    assert result.error_text is None
+    assert calls == [
+        ("playlist", "https://example.test/watch?v=1&list=abc"),
+        ("single", "https://example.test/watch?v=1&list=abc"),
+    ]
+
+
+def test_resolve_url_result_prefers_single_error_text_when_both_attempts_fail(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "resolve_playlist_result",
+        lambda url: resolver.ResolveResult(None, "playlist blocked"),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "resolve_single_result",
+        lambda url: resolver.ResolveResult(None, "single blocked"),
+    )
+
+    result = resolver.resolve_url_result("https://example.test/watch?v=1&list=abc")
+
+    assert result.item is None
+    assert result.error_text == "single blocked"

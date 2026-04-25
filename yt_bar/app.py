@@ -26,7 +26,7 @@ from .objc_bridges import (
 from .playback import LOCAL_PLAYBACK_MODE, PlaybackController
 from .recent import RecentController
 from .remote_commands import RemoteCommandController
-from .resolver import resolve_url
+from .resolver import resolve_url_result
 from .storage import Settings, SettingsStore
 from .visualizer import grid_to_braille
 
@@ -170,6 +170,17 @@ class YTBar(rumps.App):
 
     def _on_show_songs_toggled(self, _=None):
         self._show_songs = not self._show_songs
+        self._save_settings()
+        self._render_menu()
+
+    def _compact_menu_enabled(self):
+        return not self._show_play_pause and not self._show_seek and not self._show_songs
+
+    def _on_compact_menu_toggled(self, _=None):
+        show_transport = self._compact_menu_enabled()
+        self._show_play_pause = show_transport
+        self._show_seek = show_transport
+        self._show_songs = show_transport
         self._save_settings()
         self._render_menu()
 
@@ -341,6 +352,35 @@ class YTBar(rumps.App):
         self._set_progress_display()
         self._clear_now_playing_info()
 
+    @staticmethod
+    def _notification_message(error_text, *, limit=160):
+        text = " ".join(str(error_text or "").split())
+        if not text:
+            return "yt-dlp could not resolve the clipboard URL."
+        if len(text) <= limit:
+            return text
+        return f"{text[: limit - 3].rstrip()}..."
+
+    @staticmethod
+    def _clipboard_failure_subtitle(error_text):
+        normalized = str(error_text or "").lower()
+        if (
+            "not a bot" in normalized
+            or "cookies-from-browser" in normalized
+            or "sign in to confirm" in normalized
+        ):
+            return "YouTube blocked resolution"
+        return "Couldn't resolve URL"
+
+    def _enqueue_clipboard_failure_notification(self, error_text):
+        self._enqueue_ui_action(
+            UICommand.notify(
+                "Clipboard Play Failed",
+                self._clipboard_failure_subtitle(error_text),
+                self._notification_message(error_text),
+            )
+        )
+
     def _handle_menu_action(self, action: MenuAction):
         if action.kind is MenuActionKind.PLAY_FROM_CLIPBOARD:
             self.on_paste_url(None)
@@ -361,6 +401,8 @@ class YTBar(rumps.App):
             self._rename_recent_entry(action.cache_key)
         elif action.kind is MenuActionKind.REMOVE_RECENT and action.cache_key is not None:
             self._remove_recent_entry(action.cache_key)
+        elif action.kind is MenuActionKind.TOGGLE_COMPACT_MENU:
+            self._on_compact_menu_toggled()
         elif action.kind is MenuActionKind.TOGGLE_SHOW_PLAY_PAUSE:
             self._on_show_play_pause_toggled()
         elif action.kind is MenuActionKind.TOGGLE_SHOW_SEEK:
@@ -390,6 +432,9 @@ class YTBar(rumps.App):
             return
         if command.kind is UICommandKind.SEEK_DELTA:
             self._seek_current_track_by(command.delta_seconds)
+            return
+        if command.kind is UICommandKind.NOTIFY:
+            rumps.notification(command.title, command.subtitle, command.message)
 
     def _update_remote_skip_intervals(self):
         self.remote.update_skip_intervals()
@@ -576,14 +621,15 @@ class YTBar(rumps.App):
             return
 
         def _resolve_and_play():
-            item = resolve_url(url)
-            if item is None:
+            result = resolve_url_result(url)
+            if result.item is None:
+                self._enqueue_clipboard_failure_notification(result.error_text)
                 if not self.engine.is_active:
                     self._enqueue_ui_action(UICommand.stopped())
                 return
 
-            playback_mode = self.playback.playback_mode_for_item(item)
-            self._start_item_playback(item, playback_mode=playback_mode)
+            playback_mode = self.playback.playback_mode_for_item(result.item)
+            self._start_item_playback(result.item, playback_mode=playback_mode)
 
         threading.Thread(target=_resolve_and_play, daemon=True).start()
 

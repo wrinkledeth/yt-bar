@@ -46,6 +46,10 @@ class MenuController:
         self.song_picker_menu = rumps.MenuItem("Songs")
         self.recent_menu = rumps.MenuItem("Recent")
         self.settings_menu = rumps.MenuItem("Settings")
+        self.compact_menu_item = rumps.MenuItem(
+            "Compact Menu",
+            callback=lambda _: self._dispatch(MenuAction.toggle_compact_menu()),
+        )
         self.show_play_pause_item = rumps.MenuItem(
             "Show Play / Pause",
             callback=lambda _: self._dispatch(MenuAction.toggle_show_play_pause()),
@@ -80,6 +84,7 @@ class MenuController:
             self.recent_size_items[value] = item
             self.recent_size_menu[label] = item
 
+        self.settings_menu["Compact Menu"] = self.compact_menu_item
         self.settings_menu["Show Play / Pause"] = self.show_play_pause_item
         self.settings_menu["Show Seek"] = self.show_seek_item
         self.settings_menu["Show Songs"] = self.show_songs_item
@@ -185,6 +190,7 @@ class MenuController:
         self._recent_menu_observer = observer
 
     def apply_settings_check_marks(self, snapshot: MenuSnapshot):
+        self.compact_menu_item.state = 1 if self.is_compact_menu(snapshot) else 0
         self.show_play_pause_item.state = 1 if snapshot.show_play_pause else 0
         self.show_seek_item.state = 1 if snapshot.show_seek else 0
         self.show_songs_item.state = 1 if snapshot.show_songs else 0
@@ -192,6 +198,10 @@ class MenuController:
             item.state = 1 if seconds == snapshot.skip_interval else 0
         for value, item in self.recent_size_items.items():
             item.state = 1 if value == snapshot.recent_limit else 0
+
+    @staticmethod
+    def is_compact_menu(snapshot: MenuSnapshot):
+        return not snapshot.show_play_pause and not snapshot.show_seek and not snapshot.show_songs
 
     @staticmethod
     def modifier_flag(name, fallback):

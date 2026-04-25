@@ -83,7 +83,8 @@ Core:
 
 Additional:
 - The badge next to the song title shows playback source: `◌` means streaming, `●` means local cache.
-- `Settings` lets you show or hide `Songs`, `Play / Pause`, and `Seek`, change skip interval seconds, and change the recent-list limit.
+- If YouTube blocks clipboard URL resolution, the app sends a macOS notification instead of failing silently.
+- `Settings` lets you toggle `Compact Menu` to hide or restore `Songs`, `Play / Pause`, and `Seek` together, adjust those three items individually, change skip interval seconds, and change the recent-list limit.
 - Cached YouTube media, imported local files, the recent list, and settings are stored under `songs/`.
 - Single videos and imported local files stay directly under `songs/` as readable `.opus` filenames with stable hash suffixes. Playlist imports create a readable folder under `songs/` and store the playlist tracks inside it; existing files stay in place.
 

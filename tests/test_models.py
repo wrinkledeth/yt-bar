@@ -18,15 +18,21 @@ def test_ui_command_factories_create_typed_commands():
     assert UICommand.toggle().kind is UICommandKind.TOGGLE
 
     seek = UICommand.seek_delta("30")
+    notify = UICommand.notify("Title", "Subtitle", "Message")
 
     assert seek.kind is UICommandKind.SEEK_DELTA
     assert seek.delta_seconds == 30.0
+    assert notify.kind is UICommandKind.NOTIFY
+    assert notify.title == "Title"
+    assert notify.subtitle == "Subtitle"
+    assert notify.message == "Message"
 
 
 def test_menu_action_factories_create_typed_actions():
     assert MenuAction.play_from_clipboard().kind is MenuActionKind.PLAY_FROM_CLIPBOARD
     assert MenuAction.play_local_file().kind is MenuActionKind.PLAY_LOCAL_FILE
     assert MenuAction.play_pause().kind is MenuActionKind.PLAY_PAUSE
+    assert MenuAction.toggle_compact_menu().kind is MenuActionKind.TOGGLE_COMPACT_MENU
     assert MenuAction.toggle_show_play_pause().kind is MenuActionKind.TOGGLE_SHOW_PLAY_PAUSE
     assert MenuAction.toggle_show_seek().kind is MenuActionKind.TOGGLE_SHOW_SEEK
     assert MenuAction.toggle_show_songs().kind is MenuActionKind.TOGGLE_SHOW_SONGS

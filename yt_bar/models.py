@@ -35,12 +35,16 @@ class UICommandKind(Enum):
     PAUSE = "pause"
     TOGGLE = "toggle"
     SEEK_DELTA = "seek_delta"
+    NOTIFY = "notify"
 
 
 @dataclass(frozen=True)
 class UICommand:
     kind: UICommandKind
     delta_seconds: float = 0.0
+    title: str = ""
+    subtitle: str = ""
+    message: str = ""
 
     @classmethod
     def play(cls):
@@ -62,6 +66,15 @@ class UICommand:
     def seek_delta(cls, delta_seconds):
         return cls(UICommandKind.SEEK_DELTA, float(delta_seconds))
 
+    @classmethod
+    def notify(cls, title, subtitle, message):
+        return cls(
+            UICommandKind.NOTIFY,
+            title=str(title),
+            subtitle=str(subtitle),
+            message=str(message),
+        )
+
 
 class MenuActionKind(Enum):
     PLAY_FROM_CLIPBOARD = "play_from_clipboard"
@@ -72,6 +85,7 @@ class MenuActionKind(Enum):
     PLAY_RECENT = "play_recent"
     RENAME_RECENT = "rename_recent"
     REMOVE_RECENT = "remove_recent"
+    TOGGLE_COMPACT_MENU = "toggle_compact_menu"
     TOGGLE_SHOW_PLAY_PAUSE = "toggle_show_play_pause"
     TOGGLE_SHOW_SEEK = "toggle_show_seek"
     TOGGLE_SHOW_SONGS = "toggle_show_songs"
@@ -120,6 +134,10 @@ class MenuAction:
     @classmethod
     def remove_recent(cls, cache_key):
         return cls(MenuActionKind.REMOVE_RECENT, cache_key=str(cache_key))
+
+    @classmethod
+    def toggle_compact_menu(cls):
+        return cls(MenuActionKind.TOGGLE_COMPACT_MENU)
 
     @classmethod
     def toggle_show_play_pause(cls):

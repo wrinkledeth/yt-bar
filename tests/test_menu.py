@@ -146,12 +146,14 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
     assert controller.song_picker_menu._menuitem.enabled is True
     assert controller.song_picker_menu.children["song_picker_1"].title == "Track Two"
     assert controller.seek_items[3].title == "  ● 30%"
+    assert controller.compact_menu_item.state == 0
     assert controller.show_play_pause_item.state == 1
     assert controller.show_seek_item.state == 1
     assert controller.show_songs_item.state == 1
     assert controller.skip_items[60.0].state == 1
     assert controller.recent_size_items[10].state == 1
     assert list(controller.settings_menu.children) == [
+        "Compact Menu",
         "Show Play / Pause",
         "Show Seek",
         "Show Songs",
@@ -175,6 +177,7 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
     controller.recent_menu.children["recent_play_0"].callback(None)
     controller.recent_menu.children["recent_rename_0"].callback(None)
     controller.recent_menu.children["recent_remove_0"].callback(None)
+    controller.compact_menu_item.callback(None)
     controller.show_play_pause_item.callback(None)
     controller.show_seek_item.callback(None)
     controller.show_songs_item.callback(None)
@@ -191,6 +194,7 @@ def test_render_builds_full_menu_and_dispatches_callbacks(monkeypatch):
         MenuAction.play_recent("video:1"),
         MenuAction.rename_recent("video:1"),
         MenuAction.remove_recent("video:1"),
+        MenuAction.toggle_compact_menu(),
         MenuAction.toggle_show_play_pause(),
         MenuAction.toggle_show_seek(),
         MenuAction.toggle_show_songs(),
@@ -237,6 +241,7 @@ def test_render_hides_transport_items_and_shows_empty_recent_placeholder(monkeyp
     assert controller.playpause_item.callback is None
     assert controller.playpause_item._menuitem.enabled is False
     assert controller.seek_menu._menuitem.enabled is False
+    assert controller.compact_menu_item.state == 1
     assert controller.show_play_pause_item.state == 0
     assert controller.show_seek_item.state == 0
     assert controller.show_songs_item.state == 0
