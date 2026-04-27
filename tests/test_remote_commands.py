@@ -70,9 +70,13 @@ class FakeCommandCenter:
 class FakeNowPlayingInfoCenter:
     def __init__(self):
         self.set_calls = []
+        self.playback_state_calls = []
 
     def setNowPlayingInfo_(self, info):
         self.set_calls.append(info)
+
+    def setPlaybackState_(self, playback_state):
+        self.playback_state_calls.append(playback_state)
 
 
 class FakeRemoteCommandBridge:
@@ -133,6 +137,8 @@ def make_controller(
         command_status_success=0,
         command_status_command_failed=200,
         command_status_no_such_content=100,
+        playback_state_playing=1,
+        playback_state_stopped=3,
         property_elapsed_playback_time="elapsed",
         property_playback_rate="rate",
         property_title="title",
@@ -211,7 +217,7 @@ def test_remote_command_handlers_return_no_such_content_without_active_track(mon
     assert queued == []
 
 
-def test_sync_now_playing_info_updates_and_clears_payload(monkeypatch):
+def test_sync_now_playing_info_only_publishes_while_playing(monkeypatch):
     track = make_track()
     engine = SimpleNamespace(is_active=True, is_paused=True, duration=0.0, elapsed=37.5)
     controller, _, info_center, _ = make_controller(
@@ -223,14 +229,39 @@ def test_sync_now_playing_info_updates_and_clears_payload(monkeypatch):
 
     controller.sync_now_playing_info()
 
+    assert info_center.set_calls[-1] is None
+    assert info_center.playback_state_calls[-1] == 3
+
+    engine.is_paused = False
+    controller.sync_now_playing_info()
+
     assert info_center.set_calls[-1] == {
         "title": "Remote Track",
         "elapsed": 37.5,
-        "rate": 0.0,
+        "rate": 1.0,
         "duration": 123.0,
     }
+    assert info_center.playback_state_calls[-1] == 1
 
     engine.is_active = False
     controller.sync_now_playing_info()
 
     assert info_center.set_calls[-1] is None
+    assert info_center.playback_state_calls[-1] == 3
+
+
+def test_close_stops_and_clears_now_playing_state(monkeypatch):
+    track = make_track()
+    engine = SimpleNamespace(is_active=True, is_paused=False, duration=123.0, elapsed=5.0)
+    controller, _, info_center, _ = make_controller(
+        monkeypatch,
+        engine=engine,
+        current_track=lambda: track,
+        current_track_snapshot=lambda: (0, track),
+    )
+
+    controller.sync_now_playing_info()
+    controller.close()
+
+    assert info_center.set_calls[-1] is None
+    assert info_center.playback_state_calls[-1] == 3

@@ -404,6 +404,45 @@ def test_perform_ui_action_sends_notification(monkeypatch):
     assert notifications == [("Clipboard Play Failed", "Subtitle", "Message")]
 
 
+def test_resume_pause_and_toggle_paths_sync_remote_state():
+    app, _, _ = make_app_stub()
+    toggle_calls = []
+    sync_calls = []
+    app.engine = SimpleNamespace(
+        is_active=True, is_paused=True, toggle_pause=lambda: toggle_calls.append("toggle")
+    )
+    app._sync_now_playing_info = lambda: sync_calls.append("sync")
+
+    assert app._play_or_resume_current_track() is True
+
+    app.engine.is_paused = False
+    assert app._pause_current_track() is True
+    assert app._toggle_play_pause() is True
+
+    assert toggle_calls == ["toggle", "toggle", "toggle"]
+    assert sync_calls == ["sync", "sync", "sync"]
+
+
+def test_handle_stopped_ui_clears_remote_state():
+    app, _, _ = make_app_stub()
+    progress_calls = []
+    clear_calls = []
+    app.engine = SimpleNamespace(is_active=False, is_paused=False)
+    app._now_playing_title = "Current track"
+    app._now_playing_playback_mode = "stream"
+    app._set_progress_display = lambda elapsed=None, duration=None: progress_calls.append(
+        (elapsed, duration)
+    )
+    app._clear_now_playing_info = lambda: clear_calls.append("clear")
+
+    app._handle_stopped_ui()
+
+    assert app._now_playing_title == "Not Playing"
+    assert app._now_playing_playback_mode is None
+    assert progress_calls == [(None, None)]
+    assert clear_calls == ["clear"]
+
+
 def test_on_play_local_file_imports_selection_and_starts_playback(monkeypatch):
     app, queued, started = make_app_stub()
     panel, application = install_open_panel(monkeypatch, path="/tmp/song.mp3")

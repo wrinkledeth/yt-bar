@@ -41,32 +41,29 @@ class RemoteCommandController:
             return
 
         track = self._current_track()
-        if track is None or not self._engine.is_active:
+        if track is None or not self._engine.is_active or self._engine.is_paused:
             self.clear_now_playing_info()
             return
 
         info = {
             support.property_title: track.title,
             support.property_elapsed_playback_time: float(self._engine.elapsed),
-            support.property_playback_rate: 0.0 if self._engine.is_paused else 1.0,
+            support.property_playback_rate: 1.0,
         }
         duration = self._engine.duration or track.duration
         if duration > 0:
             info[support.property_playback_duration] = float(duration)
 
-        try:
-            center.setNowPlayingInfo_(info)
-        except Exception as exc:
-            log_exception("Failed to update now playing info", exc)
+        self._set_now_playing_info(info)
+        self._set_playback_state(support.playback_state_playing)
 
     def clear_now_playing_info(self):
+        support = self._support
         center = self._now_playing_info_center
-        if center is None:
+        if support is None or center is None:
             return
-        try:
-            center.setNowPlayingInfo_(None)
-        except Exception as exc:
-            log_exception("Failed to clear now playing info", exc)
+        self._set_playback_state(support.playback_state_stopped)
+        self._set_now_playing_info(None)
 
     def close(self):
         self.clear_now_playing_info()
@@ -83,6 +80,27 @@ class RemoteCommandController:
     def _remote_command_status_no_such_content(self):
         support = self._support
         return 0 if support is None else support.command_status_no_such_content
+
+    def _set_now_playing_info(self, info):
+        center = self._now_playing_info_center
+        if center is None:
+            return
+        try:
+            center.setNowPlayingInfo_(info)
+        except Exception as exc:
+            if info is None:
+                log_exception("Failed to clear now playing info", exc)
+            else:
+                log_exception("Failed to update now playing info", exc)
+
+    def _set_playback_state(self, playback_state):
+        center = self._now_playing_info_center
+        if center is None:
+            return
+        try:
+            center.setPlaybackState_(playback_state)
+        except Exception as exc:
+            log_exception("Failed to update playback state", exc)
 
     def _handle_remote_play_command(self):
         current_index, track = self._current_track_snapshot()
